@@ -1,0 +1,23 @@
+# Binarios y builds
+bin/
+*.exe
+*.test
+
+# Recarga en dev (air)
+tmp/
+
+# Cobertura
+coverage.out
+coverage.html
+
+# Entorno local
+.env
+.env.*
+
+# Basura de SO / editor
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# openapi.yaml NO se ignora: es generado pero se commitea (contrato server→apps)
