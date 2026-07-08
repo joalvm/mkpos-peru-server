@@ -69,7 +69,10 @@ INSERT INTO permissions (code, description) VALUES
     ('cash.close',       'Cerrar sesión de caja (arqueo).'),
     ('cash.movement',    'Registrar ingresos y retiros de efectivo.'),
     -- Reportes
-    ('reports.read',     'Ver reportes y dashboard.')
+    ('reports.read',     'Ver reportes y dashboard.'),
+    -- Configuración del negocio
+    ('settings.read',    'Ver la configuración del negocio.'),
+    ('settings.manage',  'Editar la configuración del negocio (nombre, ticket, formalización).')
 ON CONFLICT (code) DO UPDATE
     SET description = EXCLUDED.description;
 
@@ -103,7 +106,8 @@ JOIN permissions p ON p.code IN (
     'stock.read', 'stock.adjust',
     'sales.read', 'sales.create', 'sales.void',
     'cash.read', 'cash.open', 'cash.close', 'cash.movement',
-    'reports.read'
+    'reports.read',
+    'settings.read'
 )
 WHERE r.code = 'ENCARGADO'
 ON CONFLICT DO NOTHING;
@@ -122,5 +126,13 @@ JOIN permissions p ON p.code IN (
 )
 WHERE r.code = 'CAJERO'
 ON CONFLICT DO NOTHING;
+
+-- --- Configuración del negocio (singleton) -----------------------------------
+-- Fila única con valores iniciales seguros: negocio informal, IGV 18 % latente.
+-- ON CONFLICT DO NOTHING: nunca pisar lo que la dueña ya configuró.
+
+INSERT INTO business_settings (id, trade_name, receipt_footer) VALUES
+    (true, 'Minimarket', '¡Gracias por su compra!')
+ON CONFLICT (id) DO NOTHING;
 
 COMMIT;

@@ -15,15 +15,49 @@
 --   · Todo objeto y columna lleva COMMENT en español.
 --
 -- Orden de dominios:
---   1. Organización e identidad   2. Terminales (M2M)   3. Catálogo
---   4. Clientes                   5. Ventas             6. Inventario
---   7. Caja                       8. Compras            9. Sincronización
+--   1. Configuración y organización   2. Identidad y acceso   3. Terminales (M2M)
+--   4. Catálogo                       5. Clientes             6. Ventas
+--   7. Inventario                     8. Caja                 9. Compras
+--   10. Sincronización
 -- =============================================================================
 
 
 -- =============================================================================
--- 1. ORGANIZACIÓN E IDENTIDAD
+-- 1. CONFIGURACIÓN Y ORGANIZACIÓN
 -- =============================================================================
+
+CREATE TABLE business_settings (
+    id             boolean       NOT NULL DEFAULT true,
+    trade_name     text          NOT NULL,
+    legal_name     text          NULL,
+    ruc            text          NULL,
+    igv_rate_pct   numeric(5,2)  NOT NULL DEFAULT 18.00,
+    is_formalized  boolean       NOT NULL DEFAULT false,
+    receipt_footer text          NULL,
+    updated_seq    bigint        NOT NULL DEFAULT nextval('sync_seq'),
+    created_at     timestamptz   NOT NULL DEFAULT now(),
+    updated_at     timestamptz   NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_business_settings PRIMARY KEY (id),
+    CONSTRAINT ck_business_settings__singleton CHECK (id = true),
+    CONSTRAINT ck_business_settings__ruc_format CHECK (ruc IS NULL OR ruc ~ '^[0-9]{11}$'),
+    CONSTRAINT ck_business_settings__igv_rate_range CHECK (igv_rate_pct >= 0 AND igv_rate_pct <= 100),
+    CONSTRAINT ck_business_settings__formal_requires_ruc CHECK (NOT is_formalized OR ruc IS NOT NULL)
+);
+
+COMMENT ON TABLE business_settings IS
+    'Configuración global del negocio (fila única, sembrada por seeds/system.sql). Excepción documentada a la regla de PK uuid: es un singleton — id boolean true + CHECK garantizan una sola fila. El POS la descarga por pull (cabecera del ticket, tasa de IGV, estado de formalización).';
+COMMENT ON COLUMN business_settings.id IS 'Siempre true: PK del singleton; el CHECK impide una segunda fila.';
+COMMENT ON COLUMN business_settings.trade_name IS 'Nombre comercial del negocio, como aparece en la cabecera de los tickets.';
+COMMENT ON COLUMN business_settings.legal_name IS 'Razón social registrada en SUNAT; NULL mientras el negocio sea informal.';
+COMMENT ON COLUMN business_settings.ruc IS 'RUC del negocio (11 dígitos); NULL mientras sea informal. Obligatorio para marcar is_formalized (CHECK).';
+COMMENT ON COLUMN business_settings.igv_rate_pct IS 'Tasa de IGV vigente en porcentaje (18.00). Solo se aplica cuando is_formalized = true; el impuesto va contenido en el precio final, nunca se suma encima.';
+COMMENT ON COLUMN business_settings.is_formalized IS 'false = negocio informal: toda venta se registra con impuesto 0 y emite NOTA_VENTA. true = calcular IGV contenido por línea y habilitar BOLETA/FACTURA vía PSE (F3).';
+COMMENT ON COLUMN business_settings.receipt_footer IS 'Texto libre al pie del ticket (p. ej. "¡Gracias por su compra!"); NULL = sin pie.';
+COMMENT ON COLUMN business_settings.updated_seq IS 'Posición en el reloj lógico de sync; el POS descarga cambios de configuración por pull.';
+COMMENT ON COLUMN business_settings.created_at IS 'Fecha de creación del registro.';
+COMMENT ON COLUMN business_settings.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
+
 
 CREATE TABLE branches (
     id          uuid        NOT NULL DEFAULT uuidv7(),
@@ -51,6 +85,38 @@ COMMENT ON COLUMN branches.updated_seq IS 'Posición en el reloj lógico de sync
 COMMENT ON COLUMN branches.created_at IS 'Fecha de creación del registro.';
 COMMENT ON COLUMN branches.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
 
+
+CREATE TABLE warehouses (
+    id          uuid        NOT NULL DEFAULT uuidv7(),
+    branch_id   uuid        NULL,
+    code        text        NOT NULL,
+    name        text        NOT NULL,
+    is_default  boolean     NOT NULL DEFAULT false,
+    is_active   boolean     NOT NULL DEFAULT true,
+    updated_seq bigint      NOT NULL DEFAULT nextval('sync_seq'),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_warehouses PRIMARY KEY (id),
+    CONSTRAINT ck_warehouses__default_requires_branch CHECK (NOT is_default OR branch_id IS NOT NULL)
+);
+
+COMMENT ON TABLE warehouses IS
+    'Almacenes físicos: TODO el stock cuelga de un almacén, nunca de la sucursal directo. v1: cada sucursal nace con exactamente un almacén por defecto (la aplicación lo crea junto con la sucursal) y el POS mueve stock contra él. branch_id NULL queda reservado para un futuro almacén central sin tienda: habilitarlo será insertar la fila y agregar movement_type de traslado (ADD VALUE), sin tocar ninguna columna ni migrar el ledger.';
+COMMENT ON COLUMN warehouses.id IS 'Identificador único (UUIDv7).';
+COMMENT ON COLUMN warehouses.branch_id IS 'Sucursal dueña del almacén; NULL = almacén sin tienda (futuro almacén central).';
+COMMENT ON COLUMN warehouses.code IS 'Código corto único global (p. ej. A-S01); aparece en kardex y reportes.';
+COMMENT ON COLUMN warehouses.name IS 'Nombre descriptivo (p. ej. "Almacén tienda Centro").';
+COMMENT ON COLUMN warehouses.is_default IS 'true = almacén operativo por defecto de su sucursal: el POS registra ventas contra él y las compras entran aquí salvo que se indique otro. Uno por sucursal (índice parcial); exige branch_id (CHECK).';
+COMMENT ON COLUMN warehouses.is_active IS 'false = almacén cerrado; se conserva porque el ledger histórico lo referencia.';
+COMMENT ON COLUMN warehouses.updated_seq IS 'Posición en el reloj lógico de sync; el POS descarga sus almacenes por pull.';
+COMMENT ON COLUMN warehouses.created_at IS 'Fecha de creación del registro.';
+COMMENT ON COLUMN warehouses.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
+
+
+-- =============================================================================
+-- 2. IDENTIDAD Y ACCESO
+-- =============================================================================
 
 CREATE TABLE users (
     id            uuid        NOT NULL DEFAULT uuidv7(),
@@ -189,7 +255,7 @@ COMMENT ON COLUMN refresh_tokens.created_at IS 'Fecha de emisión del token.';
 
 
 -- =============================================================================
--- 2. TERMINALES (M2M)
+-- 3. TERMINALES (M2M)
 -- =============================================================================
 
 CREATE TABLE terminals (
@@ -216,7 +282,7 @@ COMMENT ON TABLE terminals IS
     'Puntos de venta físicos (PC con el POS de escritorio) registrados por sucursal. Se crean PENDIENTE en el panel, se enrolan con un código de un solo uso y quedan ACTIVO con credenciales M2M propias.';
 COMMENT ON COLUMN terminals.id IS 'Identificador único (UUIDv7).';
 COMMENT ON COLUMN terminals.branch_id IS 'Sucursal a la que pertenece la terminal.';
-COMMENT ON COLUMN terminals.code IS 'Código corto único por sucursal (p. ej. T01). Además define la serie de los comprobantes locales de esa terminal (numeración sin coordinación central).';
+COMMENT ON COLUMN terminals.code IS 'Código corto único GLOBAL (p. ej. S01-T01), no por sucursal: es la serie de los comprobantes que numera la terminal offline, y una serie no puede repetirse entre tiendas (ux_sale_documents__doc chocaría al sincronizar).';
 COMMENT ON COLUMN terminals.name IS 'Nombre descriptivo para mostrar (p. ej. "Caja principal").';
 COMMENT ON COLUMN terminals.status IS 'Estado de enrolamiento (PENDIENTE → ACTIVO → REVOCADO); solo ACTIVO autentica y sincroniza.';
 COMMENT ON COLUMN terminals.enrolled_at IS 'Momento en que completó el enrolamiento; NULL mientras esté PENDIENTE.';
@@ -227,13 +293,14 @@ COMMENT ON COLUMN terminals.updated_at IS 'Fecha de última modificación (mante
 
 
 CREATE TABLE terminal_enrollment_codes (
-    id          uuid        NOT NULL DEFAULT uuidv7(),
-    terminal_id uuid        NOT NULL,
-    code_hash   text        NOT NULL,
-    created_by  uuid        NOT NULL,
-    expires_at  timestamptz NOT NULL,
-    used_at     timestamptz NULL,
-    created_at  timestamptz NOT NULL DEFAULT now(),
+    id             uuid        NOT NULL DEFAULT uuidv7(),
+    terminal_id    uuid        NOT NULL,
+    code_hash      text        NOT NULL,
+    created_by     uuid        NOT NULL,
+    expires_at     timestamptz NOT NULL,
+    used_at        timestamptz NULL,
+    invalidated_at timestamptz NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_terminal_enrollment_codes PRIMARY KEY (id),
     CONSTRAINT ck_terminal_enrollment_codes__expires_after_created CHECK (expires_at > created_at)
@@ -247,6 +314,7 @@ COMMENT ON COLUMN terminal_enrollment_codes.code_hash IS 'Hash SHA-256 del códi
 COMMENT ON COLUMN terminal_enrollment_codes.created_by IS 'Usuario del panel que generó el código (auditoría).';
 COMMENT ON COLUMN terminal_enrollment_codes.expires_at IS 'Fecha límite para usar el código (~72 h desde su creación).';
 COMMENT ON COLUMN terminal_enrollment_codes.used_at IS 'Momento en que se consumió; NULL = aún disponible. Un código usado jamás se reutiliza.';
+COMMENT ON COLUMN terminal_enrollment_codes.invalidated_at IS 'Momento en que se invalidó sin usarse: la aplicación invalida el código anterior al generar uno nuevo para la misma terminal (a lo sumo un código utilizable por terminal). NULL = no invalidado.';
 COMMENT ON COLUMN terminal_enrollment_codes.created_at IS 'Fecha de generación del código.';
 
 
@@ -274,7 +342,7 @@ COMMENT ON COLUMN terminal_credentials.created_at IS 'Fecha de emisión de las c
 
 
 -- =============================================================================
--- 3. CATÁLOGO
+-- 4. CATÁLOGO
 -- =============================================================================
 
 CREATE TABLE categories (
@@ -301,18 +369,20 @@ COMMENT ON COLUMN categories.updated_at IS 'Fecha de última modificación (mant
 
 
 CREATE TABLE products (
-    id               uuid          NOT NULL DEFAULT uuidv7(),
-    category_id      uuid          NOT NULL,
-    barcode          text          NULL,
-    name             text          NOT NULL,
-    unit_type        unit_type     NOT NULL,
-    sale_price_cents bigint        NOT NULL,
-    cost_cents       bigint        NULL,
-    min_stock        numeric(10,3) NOT NULL DEFAULT 0,
-    is_active        boolean       NOT NULL DEFAULT true,
-    updated_seq      bigint        NOT NULL DEFAULT nextval('sync_seq'),
-    created_at       timestamptz   NOT NULL DEFAULT now(),
-    updated_at       timestamptz   NOT NULL DEFAULT now(),
+    id               uuid            NOT NULL DEFAULT uuidv7(),
+    category_id      uuid            NOT NULL,
+    barcode          text            NULL,
+    name             text            NOT NULL,
+    unit_type        unit_type       NOT NULL,
+    sale_price_cents bigint          NOT NULL,
+    cost_cents       bigint          NULL,
+    tax_affectation  tax_affectation NOT NULL DEFAULT 'GRAVADO',
+    is_open_price    boolean         NOT NULL DEFAULT false,
+    min_stock        numeric(10,3)   NOT NULL DEFAULT 0,
+    is_active        boolean         NOT NULL DEFAULT true,
+    updated_seq      bigint          NOT NULL DEFAULT nextval('sync_seq'),
+    created_at       timestamptz     NOT NULL DEFAULT now(),
+    updated_at       timestamptz     NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_products PRIMARY KEY (id),
     CONSTRAINT ck_products__sale_price_non_negative CHECK (sale_price_cents >= 0),
@@ -329,6 +399,8 @@ COMMENT ON COLUMN products.name IS 'Nombre del producto como se busca y aparece 
 COMMENT ON COLUMN products.unit_type IS 'Unidad de venta; KG/G/L/ML/M habilitan cantidad fraccionada digitada desde la balanza.';
 COMMENT ON COLUMN products.sale_price_cents IS 'Precio de venta vigente por unidad de medida, en céntimos de sol (p. ej. KG → céntimos por kilo).';
 COMMENT ON COLUMN products.cost_cents IS 'Costo de referencia por unidad para estimar margen; el costo real histórico vive en purchase_items. NULL si aún no se conoce.';
+COMMENT ON COLUMN products.tax_affectation IS 'Afectación IGV del producto (GRAVADO por defecto; EXONERADO para frutas/verduras frescas del Apéndice I). Sin efecto mientras business_settings.is_formalized = false, pero el catálogo ya nace clasificado para la formalización (F3).';
+COMMENT ON COLUMN products.is_open_price IS 'true = producto de precio abierto ("VARIOS"): el cajero digita el precio en cada venta; sale_price_cents actúa solo como sugerencia. Para artículos sin catalogar.';
 COMMENT ON COLUMN products.min_stock IS 'Umbral de alerta de stock bajo (en la unidad del producto); 0 = sin alerta.';
 COMMENT ON COLUMN products.is_active IS 'false = producto descontinuado: no aparece en el POS pero conserva historial (soft delete).';
 COMMENT ON COLUMN products.updated_seq IS 'Posición en el reloj lógico de sync para el pull incremental del POS (catálogo y precios).';
@@ -337,7 +409,7 @@ COMMENT ON COLUMN products.updated_at IS 'Fecha de última modificación (manten
 
 
 -- =============================================================================
--- 4. CLIENTES
+-- 5. CLIENTES
 -- =============================================================================
 
 CREATE TABLE customers (
@@ -374,7 +446,7 @@ COMMENT ON COLUMN customers.updated_at IS 'Fecha de última modificación (mante
 
 
 -- =============================================================================
--- 5. VENTAS
+-- 6. VENTAS
 -- =============================================================================
 
 CREATE TABLE sales (
@@ -391,6 +463,7 @@ CREATE TABLE sales (
     subtotal_cents  bigint      NOT NULL,
     discount_cents  bigint      NOT NULL DEFAULT 0,
     total_cents     bigint      NOT NULL,
+    tax_cents       bigint      NOT NULL DEFAULT 0,
     voided_at       timestamptz NULL,
     voided_by       uuid        NULL,
     void_reason     text        NULL,
@@ -403,6 +476,7 @@ CREATE TABLE sales (
         subtotal_cents >= 0 AND discount_cents >= 0 AND total_cents >= 0
     ),
     CONSTRAINT ck_sales__total_consistent CHECK (total_cents = subtotal_cents - discount_cents),
+    CONSTRAINT ck_sales__tax_within_total CHECK (tax_cents >= 0 AND tax_cents <= total_cents),
     CONSTRAINT ck_sales__local_number_positive CHECK (local_number > 0),
     CONSTRAINT ck_sales__void_coherence CHECK (
         (status = 'COMPLETADA' AND voided_at IS NULL AND voided_by IS NULL AND void_reason IS NULL)
@@ -425,6 +499,7 @@ COMMENT ON COLUMN sales.sold_on_local IS 'Fecha de negocio local (día de la tie
 COMMENT ON COLUMN sales.subtotal_cents IS 'Suma de los totales de los ítems, en céntimos de sol.';
 COMMENT ON COLUMN sales.discount_cents IS 'Descuento global aplicado a la venta, en céntimos; 0 si no hubo.';
 COMMENT ON COLUMN sales.total_cents IS 'Total cobrado = subtotal − descuento (garantizado por CHECK). La suma de payments debe igualarlo (regla de aplicación: no expresable como CHECK entre tablas).';
+COMMENT ON COLUMN sales.tax_cents IS 'IGV contenido en total_cents (Σ sale_items.tax_cents; los precios son finales, el impuesto nunca se suma encima). 0 mientras el negocio sea informal (business_settings.is_formalized = false).';
 COMMENT ON COLUMN sales.voided_at IS 'Momento de la anulación; NULL si la venta sigue completada.';
 COMMENT ON COLUMN sales.voided_by IS 'Usuario que autorizó la anulación (exige permiso sales.void).';
 COMMENT ON COLUMN sales.void_reason IS 'Motivo obligatorio de la anulación (error de cobro, cliente se retractó…).';
@@ -434,19 +509,24 @@ COMMENT ON COLUMN sales.updated_at IS 'Fecha de última modificación (solo camb
 
 
 CREATE TABLE sale_items (
-    id               uuid          NOT NULL DEFAULT uuidv7(),
-    sale_id          uuid          NOT NULL,
-    product_id       uuid          NOT NULL,
-    product_name     text          NOT NULL,
-    unit_type        unit_type     NOT NULL,
-    quantity         numeric(10,3) NOT NULL,
-    unit_price_cents bigint        NOT NULL,
-    total_cents      bigint        NOT NULL,
-    created_at       timestamptz   NOT NULL DEFAULT now(),
+    id               uuid            NOT NULL DEFAULT uuidv7(),
+    sale_id          uuid            NOT NULL,
+    product_id       uuid            NOT NULL,
+    product_name     text            NOT NULL,
+    unit_type        unit_type       NOT NULL,
+    quantity         numeric(10,3)   NOT NULL,
+    unit_price_cents bigint          NOT NULL,
+    total_cents      bigint          NOT NULL,
+    tax_affectation  tax_affectation NOT NULL,
+    tax_rate_pct     numeric(5,2)    NOT NULL DEFAULT 0,
+    tax_cents        bigint          NOT NULL DEFAULT 0,
+    created_at       timestamptz     NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_sale_items PRIMARY KEY (id),
     CONSTRAINT ck_sale_items__quantity_positive CHECK (quantity > 0),
-    CONSTRAINT ck_sale_items__prices_non_negative CHECK (unit_price_cents >= 0 AND total_cents >= 0)
+    CONSTRAINT ck_sale_items__prices_non_negative CHECK (unit_price_cents >= 0 AND total_cents >= 0),
+    CONSTRAINT ck_sale_items__tax_rate_range CHECK (tax_rate_pct >= 0 AND tax_rate_pct <= 100),
+    CONSTRAINT ck_sale_items__tax_within_total CHECK (tax_cents >= 0 AND tax_cents <= total_cents)
 );
 
 COMMENT ON TABLE sale_items IS
@@ -459,6 +539,9 @@ COMMENT ON COLUMN sale_items.unit_type IS 'Unidad de venta al momento de la vent
 COMMENT ON COLUMN sale_items.quantity IS 'Cantidad vendida en la unidad del producto; admite fracciones para granel (0.250 kg).';
 COMMENT ON COLUMN sale_items.unit_price_cents IS 'Precio unitario cobrado, en céntimos (snapshot del precio vigente al vender).';
 COMMENT ON COLUMN sale_items.total_cents IS 'Total de la línea en céntimos: cantidad × precio unitario, redondeado por la aplicación (el redondeo de granel se define en un solo lugar).';
+COMMENT ON COLUMN sale_items.tax_affectation IS 'Afectación IGV del producto al momento de la venta (snapshot de products.tax_affectation): la clasificación fiscal histórica no cambia si se reclasifica el producto.';
+COMMENT ON COLUMN sale_items.tax_rate_pct IS 'Tasa de IGV aplicada a la línea al vender (snapshot): 0 si el negocio era informal o la línea es EXONERADO/INAFECTO; 18.00 típico para GRAVADO ya formalizado.';
+COMMENT ON COLUMN sale_items.tax_cents IS 'IGV contenido en total_cents de la línea: total − round(total / (1 + tasa/100)), redondeo definido en un solo lugar por la aplicación. 0 mientras el negocio sea informal.';
 COMMENT ON COLUMN sale_items.created_at IS 'Fecha de inserción del registro en el servidor.';
 
 
@@ -485,13 +568,14 @@ COMMENT ON COLUMN payments.created_at IS 'Fecha de inserción del registro en el
 
 
 CREATE TABLE sale_documents (
-    id         uuid          NOT NULL DEFAULT uuidv7(),
-    sale_id    uuid          NOT NULL,
-    doc_type   document_type NOT NULL,
-    series     text          NOT NULL,
-    number     bigint        NOT NULL,
-    issued_at  timestamptz   NOT NULL,
-    created_at timestamptz   NOT NULL DEFAULT now(),
+    id            uuid          NOT NULL DEFAULT uuidv7(),
+    sale_id       uuid          NOT NULL,
+    doc_type      document_type NOT NULL,
+    series        text          NOT NULL,
+    number        bigint        NOT NULL,
+    customer_name text          NULL,
+    issued_at     timestamptz   NOT NULL,
+    created_at    timestamptz   NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_sale_documents PRIMARY KEY (id),
     CONSTRAINT ck_sale_documents__number_positive CHECK (number > 0)
@@ -504,17 +588,18 @@ COMMENT ON COLUMN sale_documents.sale_id IS 'Venta que respalda este comprobante
 COMMENT ON COLUMN sale_documents.doc_type IS 'Tipo de comprobante emitido.';
 COMMENT ON COLUMN sale_documents.series IS 'Serie del comprobante. Para NOTA_VENTA es el código de la terminal (T01): cada terminal numera su propia serie offline sin chocar con otras.';
 COMMENT ON COLUMN sale_documents.number IS 'Número correlativo dentro de la serie; único junto con doc_type y series.';
+COMMENT ON COLUMN sale_documents.customer_name IS 'Nombre digitado para una nota de venta nominada ("a nombre de…") cuando el cliente no está registrado en customers; snapshot impreso en el ticket. NULL en la venta anónima normal.';
 COMMENT ON COLUMN sale_documents.issued_at IS 'Momento de emisión del comprobante (normalmente el de la venta).';
 COMMENT ON COLUMN sale_documents.created_at IS 'Fecha de inserción del registro en el servidor.';
 
 
 -- =============================================================================
--- 6. INVENTARIO
+-- 7. INVENTARIO
 -- =============================================================================
 
 CREATE TABLE stock_movements (
     id               uuid          NOT NULL DEFAULT uuidv7(),
-    branch_id        uuid          NOT NULL,
+    warehouse_id     uuid          NOT NULL,
     product_id       uuid          NOT NULL,
     type             movement_type NOT NULL,
     quantity         numeric(10,3) NOT NULL,
@@ -522,6 +607,7 @@ CREATE TABLE stock_movements (
     purchase_item_id uuid          NULL,
     user_id          uuid          NOT NULL,
     reason           text          NULL,
+    occurred_at      timestamptz   NOT NULL,
     created_at       timestamptz   NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_stock_movements PRIMARY KEY (id),
@@ -541,9 +627,9 @@ CREATE TABLE stock_movements (
 );
 
 COMMENT ON TABLE stock_movements IS
-    'Libro mayor de inventario (ledger). El stock actual de un producto en una sucursal es SUM(quantity) — ver vista stock_levels. Nunca se edita ni borra: los errores se corrigen con un movimiento AJUSTE tras conteo físico.';
-COMMENT ON COLUMN stock_movements.id IS 'Identificador único (UUIDv7).';
-COMMENT ON COLUMN stock_movements.branch_id IS 'Sucursal cuyo inventario afecta el movimiento.';
+    'Libro mayor de inventario (ledger). El stock actual de un producto en un almacén es SUM(quantity) — ver vista stock_levels (expone también la sucursal vía warehouses). Nunca se edita ni borra: los errores se corrigen con un movimiento AJUSTE tras conteo físico. Traslados entre almacenes: futuros movement_type nuevos (ADD VALUE), no UPDATE.';
+COMMENT ON COLUMN stock_movements.id IS 'Identificador único (UUIDv7); lo genera la terminal cuando el movimiento nace offline (VENTA, ANULACION_VENTA, ajustes del POS).';
+COMMENT ON COLUMN stock_movements.warehouse_id IS 'Almacén cuyo stock afecta el movimiento; la sucursal se deriva de warehouses.branch_id (3FN: no se duplica aquí).';
 COMMENT ON COLUMN stock_movements.product_id IS 'Producto afectado.';
 COMMENT ON COLUMN stock_movements.type IS 'Naturaleza del movimiento; determina el signo permitido de quantity (CHECK).';
 COMMENT ON COLUMN stock_movements.quantity IS 'Delta de stock con signo, en la unidad del producto: negativo saca (VENTA, MERMA), positivo ingresa (COMPRA, ANULACION_VENTA), AJUSTE lleva el signo de la corrección.';
@@ -551,11 +637,12 @@ COMMENT ON COLUMN stock_movements.sale_item_id IS 'Línea de venta que originó 
 COMMENT ON COLUMN stock_movements.purchase_item_id IS 'Línea de compra que originó el movimiento (obligatoria en COMPRA); trazabilidad completa.';
 COMMENT ON COLUMN stock_movements.user_id IS 'Usuario responsable: el cajero de la venta o quien registró el ajuste/merma/compra.';
 COMMENT ON COLUMN stock_movements.reason IS 'Motivo del movimiento; obligatorio en AJUSTE y MERMA (p. ej. "conteo mensual", "vencido").';
-COMMENT ON COLUMN stock_movements.created_at IS 'Momento del movimiento.';
+COMMENT ON COLUMN stock_movements.occurred_at IS 'Momento real del movimiento según su origen (reloj de la terminal si nació offline); base del kardex. created_at solo dice cuándo lo insertó el servidor.';
+COMMENT ON COLUMN stock_movements.created_at IS 'Fecha de inserción del registro en el servidor.';
 
 
 -- =============================================================================
--- 7. CAJA
+-- 8. CAJA
 -- =============================================================================
 
 CREATE TABLE cash_sessions (
@@ -613,6 +700,7 @@ CREATE TABLE cash_movements (
     amount_cents    bigint             NOT NULL,
     reason          text               NOT NULL,
     user_id         uuid               NOT NULL,
+    occurred_at     timestamptz        NOT NULL,
     created_at      timestamptz        NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_cash_movements PRIMARY KEY (id),
@@ -627,22 +715,24 @@ COMMENT ON COLUMN cash_movements.type IS 'INGRESO suma al efectivo esperado; RET
 COMMENT ON COLUMN cash_movements.amount_cents IS 'Monto del movimiento en céntimos; siempre positivo (el sentido lo da type).';
 COMMENT ON COLUMN cash_movements.reason IS 'Motivo obligatorio (p. ej. "pago a proveedor", "retiro de la dueña").';
 COMMENT ON COLUMN cash_movements.user_id IS 'Usuario que registró el movimiento.';
-COMMENT ON COLUMN cash_movements.created_at IS 'Momento del movimiento.';
+COMMENT ON COLUMN cash_movements.occurred_at IS 'Momento real del movimiento según el reloj de la terminal (nace offline); created_at solo dice cuándo lo insertó el servidor.';
+COMMENT ON COLUMN cash_movements.created_at IS 'Fecha de inserción del registro en el servidor.';
 
 
 -- =============================================================================
--- 8. COMPRAS
+-- 9. COMPRAS
 -- =============================================================================
 
 CREATE TABLE suppliers (
-    id         uuid        NOT NULL DEFAULT uuidv7(),
-    name       text        NOT NULL,
-    ruc        text        NULL,
-    phone      text        NULL,
-    address    text        NULL,
-    is_active  boolean     NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
+    id           uuid        NOT NULL DEFAULT uuidv7(),
+    name         text        NOT NULL,
+    ruc          text        NULL,
+    contact_name text        NULL,
+    phone        text        NULL,
+    address      text        NULL,
+    is_active    boolean     NOT NULL DEFAULT true,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_suppliers PRIMARY KEY (id),
     CONSTRAINT ck_suppliers__ruc_format CHECK (ruc IS NULL OR ruc ~ '^[0-9]{11}$')
@@ -653,6 +743,7 @@ COMMENT ON TABLE suppliers IS
 COMMENT ON COLUMN suppliers.id IS 'Identificador único (UUIDv7).';
 COMMENT ON COLUMN suppliers.name IS 'Nombre comercial del proveedor.';
 COMMENT ON COLUMN suppliers.ruc IS 'RUC del proveedor (11 dígitos); único cuando existe. NULL para puestos informales del mayorista.';
+COMMENT ON COLUMN suppliers.contact_name IS 'Nombre del vendedor o contacto que toma los pedidos; opcional.';
 COMMENT ON COLUMN suppliers.phone IS 'Teléfono para hacer pedidos; opcional.';
 COMMENT ON COLUMN suppliers.address IS 'Dirección del proveedor; opcional.';
 COMMENT ON COLUMN suppliers.is_active IS 'false = ya no se le compra; se conserva por el historial de compras.';
@@ -661,18 +752,19 @@ COMMENT ON COLUMN suppliers.updated_at IS 'Fecha de última modificación (mante
 
 
 CREATE TABLE purchases (
-    id          uuid            NOT NULL DEFAULT uuidv7(),
-    branch_id   uuid            NOT NULL,
-    supplier_id uuid            NULL,
-    kind        purchase_kind   NOT NULL,
-    status      purchase_status NOT NULL,
-    ordered_at  timestamptz     NULL,
-    received_at timestamptz     NULL,
-    total_cents bigint          NOT NULL DEFAULT 0,
-    note        text            NULL,
-    created_by  uuid            NOT NULL,
-    created_at  timestamptz     NOT NULL DEFAULT now(),
-    updated_at  timestamptz     NOT NULL DEFAULT now(),
+    id            uuid            NOT NULL DEFAULT uuidv7(),
+    warehouse_id  uuid            NOT NULL,
+    supplier_id   uuid            NULL,
+    kind          purchase_kind   NOT NULL,
+    status        purchase_status NOT NULL,
+    doc_reference text            NULL,
+    ordered_at    timestamptz     NULL,
+    received_at   timestamptz     NULL,
+    total_cents   bigint          NOT NULL DEFAULT 0,
+    note          text            NULL,
+    created_by    uuid            NOT NULL,
+    created_at    timestamptz     NOT NULL DEFAULT now(),
+    updated_at    timestamptz     NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_purchases PRIMARY KEY (id),
     CONSTRAINT ck_purchases__total_non_negative CHECK (total_cents >= 0),
@@ -695,10 +787,11 @@ CREATE TABLE purchases (
 COMMENT ON TABLE purchases IS
     'Compras de mercadería. MAYORISTA: se compra y recibe en el acto (nace RECIBIDA, proveedor opcional). DISTRIBUIDORA: pedido que llega días después (PEDIDA → RECIBIDA | CANCELADA, proveedor obligatorio). Pasar a RECIBIDA genera los movimientos de stock COMPRA.';
 COMMENT ON COLUMN purchases.id IS 'Identificador único (UUIDv7).';
-COMMENT ON COLUMN purchases.branch_id IS 'Sucursal que recibe la mercadería.';
+COMMENT ON COLUMN purchases.warehouse_id IS 'Almacén donde entra la mercadería (v1: el almacén por defecto de la sucursal); la sucursal se deriva de warehouses.branch_id.';
 COMMENT ON COLUMN purchases.supplier_id IS 'Proveedor; obligatorio para DISTRIBUIDORA (CHECK), opcional para MAYORISTA.';
 COMMENT ON COLUMN purchases.kind IS 'Modalidad de compra: MAYORISTA o DISTRIBUIDORA; define el ciclo de estados permitido.';
 COMMENT ON COLUMN purchases.status IS 'Estado del ciclo de vida; solo el paso a RECIBIDA ingresa stock.';
+COMMENT ON COLUMN purchases.doc_reference IS 'Referencia del documento del proveedor (nro. de factura o guía) para conciliar; opcional.';
 COMMENT ON COLUMN purchases.ordered_at IS 'Fecha del pedido; obligatoria para DISTRIBUIDORA, NULL para MAYORISTA (no hay pedido previo).';
 COMMENT ON COLUMN purchases.received_at IS 'Fecha de recepción de la mercadería; NOT NULL exactamente cuando status = RECIBIDA (CHECK).';
 COMMENT ON COLUMN purchases.total_cents IS 'Costo total de la compra en céntimos; mantenido por la aplicación como suma de purchase_items.';
@@ -734,7 +827,7 @@ COMMENT ON COLUMN purchase_items.created_at IS 'Fecha de creación del registro.
 
 
 -- =============================================================================
--- 9. SINCRONIZACIÓN
+-- 10. SINCRONIZACIÓN
 -- =============================================================================
 
 CREATE TABLE sync_ingest_log (
@@ -764,7 +857,13 @@ COMMENT ON COLUMN sync_ingest_log.received_at IS 'Momento en que el servidor rec
 -- cadena de rotación de refresh_tokens (SET NULL).
 -- =============================================================================
 
--- --- 1. Organización e identidad -------------------------------------------
+-- --- 1. Configuración y organización ----------------------------------------
+
+ALTER TABLE warehouses
+    ADD CONSTRAINT fk_warehouses__branch_id
+        FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE RESTRICT;
+
+-- --- 2. Identidad y acceso ---------------------------------------------------
 
 ALTER TABLE user_roles
     ADD CONSTRAINT fk_user_roles__user_id
@@ -786,7 +885,7 @@ ALTER TABLE refresh_tokens
     ADD CONSTRAINT fk_refresh_tokens__replaced_by_id
         FOREIGN KEY (replaced_by_id) REFERENCES refresh_tokens (id) ON DELETE SET NULL;
 
--- --- 2. Terminales -----------------------------------------------------------
+-- --- 3. Terminales -----------------------------------------------------------
 
 ALTER TABLE terminals
     ADD CONSTRAINT fk_terminals__branch_id
@@ -802,13 +901,13 @@ ALTER TABLE terminal_credentials
     ADD CONSTRAINT fk_terminal_credentials__terminal_id
         FOREIGN KEY (terminal_id) REFERENCES terminals (id) ON DELETE RESTRICT;
 
--- --- 3. Catálogo -------------------------------------------------------------
+-- --- 4. Catálogo -------------------------------------------------------------
 
 ALTER TABLE products
     ADD CONSTRAINT fk_products__category_id
         FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE RESTRICT;
 
--- --- 5. Ventas ---------------------------------------------------------------
+-- --- 6. Ventas ---------------------------------------------------------------
 
 ALTER TABLE sales
     ADD CONSTRAINT fk_sales__branch_id
@@ -838,11 +937,11 @@ ALTER TABLE sale_documents
     ADD CONSTRAINT fk_sale_documents__sale_id
         FOREIGN KEY (sale_id) REFERENCES sales (id) ON DELETE RESTRICT;
 
--- --- 6. Inventario -----------------------------------------------------------
+-- --- 7. Inventario -----------------------------------------------------------
 
 ALTER TABLE stock_movements
-    ADD CONSTRAINT fk_stock_movements__branch_id
-        FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT fk_stock_movements__warehouse_id
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses (id) ON DELETE RESTRICT,
     ADD CONSTRAINT fk_stock_movements__product_id
         FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE RESTRICT,
     ADD CONSTRAINT fk_stock_movements__sale_item_id
@@ -852,7 +951,7 @@ ALTER TABLE stock_movements
     ADD CONSTRAINT fk_stock_movements__user_id
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT;
 
--- --- 7. Caja -----------------------------------------------------------------
+-- --- 8. Caja -----------------------------------------------------------------
 
 ALTER TABLE cash_sessions
     ADD CONSTRAINT fk_cash_sessions__branch_id
@@ -870,11 +969,11 @@ ALTER TABLE cash_movements
     ADD CONSTRAINT fk_cash_movements__user_id
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT;
 
--- --- 8. Compras --------------------------------------------------------------
+-- --- 9. Compras --------------------------------------------------------------
 
 ALTER TABLE purchases
-    ADD CONSTRAINT fk_purchases__branch_id
-        FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT fk_purchases__warehouse_id
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses (id) ON DELETE RESTRICT,
     ADD CONSTRAINT fk_purchases__supplier_id
         FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT,
     ADD CONSTRAINT fk_purchases__created_by
@@ -886,7 +985,7 @@ ALTER TABLE purchase_items
     ADD CONSTRAINT fk_purchase_items__product_id
         FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE RESTRICT;
 
--- --- 9. Sincronización -------------------------------------------------------
+-- --- 10. Sincronización ------------------------------------------------------
 
 ALTER TABLE sync_ingest_log
     ADD CONSTRAINT fk_sync_ingest_log__terminal_id

@@ -18,7 +18,7 @@ la BD desde cero. Los seeders reponen los datos.
 | 6 | `triggers.sql` | Triggers de infraestructura (nunca lógica de negocio) |
 | 7 | `views.sql` | `stock_levels` (stock derivado del ledger) |
 | 8 | `indexes.sql` | Únicos (`ux_`), FK e índices de consulta (`ix_`) |
-| — | `seeds/system.sql` | Roles, permisos, otorgamientos (idempotente, corre siempre) |
+| — | `seeds/system.sql` | Roles, permisos, otorgamientos + `business_settings` inicial (idempotente, corre siempre) |
 | — | `seeds/dev.sql` | Datos de prueba (pendiente; ver PLAN.md T3) |
 
 ## Uso
@@ -33,8 +33,16 @@ psql "$DATABASE_URL" -f database/seeds/system.sql
 
 ## Convenciones (resumen de PROYECTO.md § 6-7)
 
-- PK `uuid DEFAULT uuidv7()`; las filas nacidas en el POS traen su id de la terminal.
-- Dinero `bigint` `*_cents`; cantidades `numeric(10,3)`; fechas `timestamptz`.
+- PK `uuid DEFAULT uuidv7()`; las filas nacidas en el POS traen su id de la
+  terminal. Excepción única: `business_settings` (singleton, PK boolean).
+- Dinero `bigint` `*_cents`; cantidades `numeric(10,3)`; fechas `timestamptz`
+  (+ `occurred_at`/`sold_at` = momento real según el origen offline).
+- El stock cuelga de **almacenes** (`warehouses`; v1 = uno por defecto por
+  sucursal), nunca de la sucursal directo — el futuro almacén central es una
+  fila con `branch_id NULL`, no una migración.
+- Impuestos: precios finales con IGV **contenido**; snapshots fiscales en
+  `sale_items` (afectación, tasa, IGV) — todo en 0 mientras
+  `business_settings.is_formalized = false`.
 - Identificadores en inglés; **valores de enums en español** (mayúsculas ASCII).
 - Todo objeto que acepte `COMMENT` va comentado en español.
 - FKs siempre `ON DELETE RESTRICT` (excepción documentada: `refresh_tokens.replaced_by_id` → `SET NULL`) y siempre indexadas.

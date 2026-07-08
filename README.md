@@ -10,6 +10,8 @@ M2M terminales), RBAC y reportes.
 
 ## Estado
 
-Fase 0 — repositorio creado, scaffolding pendiente (estructura prevista en
-PROYECTO.md § 2: `cmd/api`, `internal/{domain,http,store,sync}`, `db/{schema,seeds}`,
-`docker-compose.yml` solo-dev, `Taskfile.yml`, `openapi.yaml` generado).
+Fase 0 — esquema de BD completo y validado en `database/` (init.sql + seeds);
+código Go pendiente. Plan de ejecución: `PLAN.md` (T1→T14); estructura objetivo
+en PROYECTO.md § 2 (`cmd/api`, `internal/{config,api,auth,domain,store,sync}`,
+`db/queries/`, `docker-compose.yml` solo-dev, `Taskfile.yml`, `openapi.yaml`
+generado por huma).

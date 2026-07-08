@@ -2,7 +2,8 @@
 -- triggers.sql — Triggers de infraestructura.
 --   · trg_*__set_updated_at : toda tabla mutable (con columna updated_at).
 --   · trg_*__set_updated_seq: solo tablas que el POS descarga por pull
---     incremental (branches, users, categories, products, customers).
+--     incremental (business_settings, branches, warehouses, users, categories,
+--     products, customers).
 --     Las tablas RBAC (roles, permissions, role_permissions, user_roles) no lo
 --     necesitan: viajan como snapshot completo en cada pull.
 -- Las tablas-libro (stock_movements, payments, cash_movements, sale_items,
@@ -11,11 +12,23 @@
 
 -- --- updated_at --------------------------------------------------------------
 
+CREATE TRIGGER trg_business_settings__set_updated_at
+    BEFORE UPDATE ON business_settings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON TRIGGER trg_business_settings__set_updated_at ON business_settings IS
+    'Mantiene business_settings.updated_at en cada modificación.';
+
 CREATE TRIGGER trg_branches__set_updated_at
     BEFORE UPDATE ON branches
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 COMMENT ON TRIGGER trg_branches__set_updated_at ON branches IS
     'Mantiene branches.updated_at en cada modificación.';
+
+CREATE TRIGGER trg_warehouses__set_updated_at
+    BEFORE UPDATE ON warehouses
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON TRIGGER trg_warehouses__set_updated_at ON warehouses IS
+    'Mantiene warehouses.updated_at en cada modificación.';
 
 CREATE TRIGGER trg_users__set_updated_at
     BEFORE UPDATE ON users
@@ -79,11 +92,23 @@ COMMENT ON TRIGGER trg_purchases__set_updated_at ON purchases IS
 
 -- --- updated_seq (pull incremental del POS) ----------------------------------
 
+CREATE TRIGGER trg_business_settings__set_updated_seq
+    BEFORE UPDATE ON business_settings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
+COMMENT ON TRIGGER trg_business_settings__set_updated_seq ON business_settings IS
+    'Avanza business_settings.updated_seq; los cambios de configuración (nombre, pie de ticket, formalización) llegan al POS en el siguiente pull.';
+
 CREATE TRIGGER trg_branches__set_updated_seq
     BEFORE UPDATE ON branches
     FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
 COMMENT ON TRIGGER trg_branches__set_updated_seq ON branches IS
     'Avanza branches.updated_seq para que el cambio entre en el próximo pull de las terminales.';
+
+CREATE TRIGGER trg_warehouses__set_updated_seq
+    BEFORE UPDATE ON warehouses
+    FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
+COMMENT ON TRIGGER trg_warehouses__set_updated_seq ON warehouses IS
+    'Avanza warehouses.updated_seq; el POS conoce su almacén por defecto vía pull.';
 
 CREATE TRIGGER trg_users__set_updated_seq
     BEFORE UPDATE ON users

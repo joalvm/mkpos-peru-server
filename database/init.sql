@@ -19,6 +19,7 @@
 
 -- 3. Enums (un archivo por tipo)
 \ir enums/unit_type.sql
+\ir enums/tax_affectation.sql
 \ir enums/payment_method.sql
 \ir enums/movement_type.sql
 \ir enums/sale_status.sql

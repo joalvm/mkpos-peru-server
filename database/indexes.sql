@@ -7,13 +7,26 @@
 --   · Los índices implícitos de las PK no se comentan: su propósito es evidente.
 -- =============================================================================
 
--- --- 1. Organización e identidad --------------------------------------------
+-- --- 1. Configuración y organización ----------------------------------------
 
 CREATE UNIQUE INDEX ux_branches__code ON branches (code);
 COMMENT ON INDEX ux_branches__code IS 'Un código de sucursal no se repite.';
 
 CREATE INDEX ix_branches__updated_seq ON branches (updated_seq);
 COMMENT ON INDEX ix_branches__updated_seq IS 'Escaneo por cursor del pull de sync.';
+
+CREATE UNIQUE INDEX ux_warehouses__code ON warehouses (code);
+COMMENT ON INDEX ux_warehouses__code IS 'Un código de almacén no se repite (aparece en kardex y reportes).';
+
+CREATE UNIQUE INDEX ux_warehouses__default_per_branch
+    ON warehouses (branch_id) WHERE is_default;
+COMMENT ON INDEX ux_warehouses__default_per_branch IS 'A lo sumo un almacén por defecto por sucursal (el que usa el POS y las compras v1).';
+
+CREATE INDEX ix_warehouses__branch_id ON warehouses (branch_id);
+COMMENT ON INDEX ix_warehouses__branch_id IS 'Índice de FK: almacenes de una sucursal.';
+
+CREATE INDEX ix_warehouses__updated_seq ON warehouses (updated_seq);
+COMMENT ON INDEX ix_warehouses__updated_seq IS 'Escaneo por cursor del pull de sync.';
 
 CREATE UNIQUE INDEX ux_users__username ON users (lower(username));
 COMMENT ON INDEX ux_users__username IS 'Username único sin distinción de mayúsculas.';
@@ -60,8 +73,11 @@ COMMENT ON INDEX ix_refresh_tokens__active_expiry IS 'Limpieza periódica de tok
 
 -- --- 2. Terminales -----------------------------------------------------------
 
-CREATE UNIQUE INDEX ux_terminals__branch_code ON terminals (branch_id, code);
-COMMENT ON INDEX ux_terminals__branch_code IS 'Código de terminal único por sucursal (T01 puede existir en dos tiendas); cubre además la FK branch_id.';
+CREATE UNIQUE INDEX ux_terminals__code ON terminals (code);
+COMMENT ON INDEX ux_terminals__code IS 'Código de terminal único GLOBAL: es la serie de sus comprobantes y una serie no puede repetirse entre tiendas.';
+
+CREATE INDEX ix_terminals__branch_id ON terminals (branch_id);
+COMMENT ON INDEX ix_terminals__branch_id IS 'Índice de FK: terminales de una sucursal.';
 
 CREATE UNIQUE INDEX ux_terminal_enrollment_codes__code_hash
     ON terminal_enrollment_codes (code_hash);
@@ -150,9 +166,9 @@ COMMENT ON INDEX ux_sale_documents__doc IS 'No hay dos comprobantes con el mismo
 
 -- --- 6. Inventario -----------------------------------------------------------
 
-CREATE INDEX ix_stock_movements__branch_product
-    ON stock_movements (branch_id, product_id, created_at);
-COMMENT ON INDEX ix_stock_movements__branch_product IS 'Kardex de un producto en una sucursal y agregación de stock_levels; cubre además la FK branch_id.';
+CREATE INDEX ix_stock_movements__warehouse_product
+    ON stock_movements (warehouse_id, product_id, occurred_at);
+COMMENT ON INDEX ix_stock_movements__warehouse_product IS 'Kardex de un producto en un almacén (orden cronológico real) y agregación de stock_levels; cubre además la FK warehouse_id.';
 
 CREATE INDEX ix_stock_movements__product_id ON stock_movements (product_id);
 COMMENT ON INDEX ix_stock_movements__product_id IS 'Índice de FK: movimientos de un producto en todas las sucursales.';
@@ -197,8 +213,8 @@ COMMENT ON INDEX ix_cash_movements__user_id IS 'Índice de FK: auditoría de ing
 CREATE UNIQUE INDEX ux_suppliers__ruc ON suppliers (ruc) WHERE ruc IS NOT NULL;
 COMMENT ON INDEX ux_suppliers__ruc IS 'RUC único cuando existe; parcial porque los puestos del mayorista pueden no tener.';
 
-CREATE INDEX ix_purchases__branch_id ON purchases (branch_id);
-COMMENT ON INDEX ix_purchases__branch_id IS 'Índice de FK: compras por sucursal.';
+CREATE INDEX ix_purchases__warehouse_id ON purchases (warehouse_id);
+COMMENT ON INDEX ix_purchases__warehouse_id IS 'Índice de FK: compras por almacén (y por sucursal vía warehouses).';
 
 CREATE INDEX ix_purchases__supplier_id ON purchases (supplier_id) WHERE supplier_id IS NOT NULL;
 COMMENT ON INDEX ix_purchases__supplier_id IS 'Índice de FK: historial por proveedor; parcial.';
