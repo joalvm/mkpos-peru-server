@@ -4,6 +4,33 @@ Fuente de verdad del esquema. **Sin migraciones hasta producción**
 (PROYECTO.md § 6): cambiar el esquema = editar estos archivos y reconstruir
 la BD desde cero. Los seeders reponen los datos.
 
+## Esquemas por dominio
+
+Cada dominio vive en su **propio esquema de PostgreSQL**; `public` queda solo
+para extensiones y funciones de infraestructura transversal
+(`public.set_updated_at` / `public.set_updated_seq`) — **cero tablas en
+public**. Toda referencia SQL (DDL, queries de sqlc, seeds) va **siempre
+calificada** `esquema.tabla`: nada depende del `search_path`.
+
+| # | Esquema | Contenido |
+|---|---|---|
+| 01 | `org` | `business_settings` (singleton), `warehouses`, `branches` |
+| 02 | `access` | `users`, `roles`, `permissions`, `role_permissions`, `user_roles`, `refresh_tokens` |
+| 03 | `terminals` | `terminals`, `terminal_enrollment_codes`, `terminal_credentials` |
+| 04 | `catalog` | `product_categories`, `brands`, `products`, `product_presentations`, `product_barcodes` |
+| 05 | `customers` | `customers` |
+| 06 | `sales` | `sales`, `sale_items`, `payments`, `sale_documents` |
+| 07 | `inventory` | `stock_movements` (kardex), `inventory_counts`, `inventory_count_items`, vista `stock_levels` |
+| 08 | `cash` | `cash_sessions`, `cash_movements` |
+| 09 | `purchases` | `suppliers`, `purchases`, `purchase_items` |
+| 10 | `sync` | `sync_ingest_log`, secuencia `sync_seq` |
+| 11 | `reports` | `reports` (estado + cola SKIP LOCKED de reportes en segundo plano) |
+| 12 | `notifications` | `notifications` (campanita web/mobile; no sincroniza al POS) |
+| 13 | `logs` | telemetría HTTP `requests` + satélites 1:1 (`request_queries/bodies/headers/agents/errors`, `responses`) |
+
+Los enums viven en el esquema de su dominio (`catalog.unit_type`,
+`sales.payment_method`, `inventory.movement_type`…).
+
 ## Estructura y orden de ejecución
 
 `init.sql` orquesta todo con `\ir` (rutas relativas al propio archivo).
@@ -13,21 +40,19 @@ archivo crezca hasta volverse ilegible:
 
 | Orden | Archivo/carpeta | Contenido |
 |---|---|---|
-| 1 | `extensions.sql` | `pg_trgm` (uuidv7 es core en PG 18) |
-| 2 | `sequences.sql` | `sync_seq` — reloj lógico del pull de sync |
-| 3 | `enums/*.sql` | Un archivo por enum; **valores en español** |
-| 4 | `tables/01..10_*.sql` | Tablas por dominio + COMMENT; **sin FK** |
-| 5 | `tables/99_relations.sql` | **TODAS las FK** del esquema (convención: relaciones al final, panorama de corrido; el orden de creación entre dominios deja de importar) |
-| 6 | `functions.sql` | Trigger functions (`set_updated_at`, `set_updated_seq`) |
-| 7 | `triggers/01..09_*.sql` | Triggers de infraestructura por dominio (nunca lógica de negocio) |
-| 8 | `views.sql` | `stock_levels` (stock derivado del ledger) |
-| 9 | `indexes/01..10_*.sql` | Únicos (`ux_`), FK e índices de consulta (`ix_`) por dominio |
+| 1 | `schemas.sql` | Los 13 esquemas de dominio, con COMMENT |
+| 2 | `extensions.sql` | `pg_trgm` (uuidv7 es core en PG 18) |
+| 3 | `sequences.sql` | `sync.sync_seq` — reloj lógico del pull de sync |
+| 4 | `enums/*.sql` | Un archivo por enum; **valores en español** |
+| 5 | `tables/01..13_*.sql` | Tablas por dominio + COMMENT; **sin FK** |
+| 6 | `tables/99_relations.sql` | **TODAS las FK** del esquema (convención: relaciones al final, panorama de corrido; el orden de creación entre dominios deja de importar). `logs` sin FK a propósito |
+| 7 | `functions.sql` | Trigger functions (`public.set_updated_at`, `public.set_updated_seq`) + gestión de particiones (`logs.ensure_partitions`, `logs.drop_partitions_older_than`) |
+| 8 | `triggers/01..12_*.sql` | Triggers de infraestructura por dominio (nunca lógica de negocio) |
+| 9 | `views.sql` | `inventory.stock_levels` (stock derivado del ledger) |
+| 10 | `indexes/01..13_*.sql` | Únicos (`ux_`), FK e índices de consulta (`ix_`) por dominio |
+| 11 | `SELECT logs.ensure_partitions(1)` | Particiones mensuales iniciales de la telemetría |
 | — | `seeds/system.sql` | Roles, permisos, otorgamientos + `business_settings` inicial (idempotente, corre siempre) |
 | — | `seeds/dev.sql` | Datos de prueba (pendiente; ver PLAN.md T3) |
-
-Dominios (numeración compartida): 01 organización · 02 acceso · 03 terminales ·
-04 catálogo · 05 clientes · 06 ventas · 07 inventario · 08 caja · 09 compras ·
-10 sync.
 
 ## Uso
 
@@ -37,6 +62,7 @@ psql "$DATABASE_URL" -f database/init.sql
 psql "$DATABASE_URL" -f database/seeds/system.sql
 
 # cuando exista el Taskfile (PLAN.md): task db:reset / task db:seed:dev
+# (db:reset dropea los 13 esquemas de dominio + public y reconstruye)
 ```
 
 ## Convenciones (resumen de PROYECTO.md § 6-7)
@@ -56,9 +82,19 @@ psql "$DATABASE_URL" -f database/seeds/system.sql
   aparte; snapshots fiscales en `sale_items` — todo en 0 mientras
   `business_settings.is_formalized = false`.
 - Identificadores en inglés; **valores de enums en español** (mayúsculas ASCII).
-- Todo objeto que acepte `COMMENT` va comentado en español.
-- FKs siempre `ON DELETE RESTRICT` (excepción documentada: `refresh_tokens.replaced_by_id` → `SET NULL`) y siempre indexadas.
+- Todo objeto que acepte `COMMENT` va comentado en español (esquemas
+  incluidos). Las particiones mensuales de `logs` son instancias generadas
+  dinámicamente: no llevan COMMENT propio.
+- FKs siempre `ON DELETE RESTRICT` (excepción documentada:
+  `refresh_tokens.replaced_by_id` → `SET NULL`) y siempre indexadas. El
+  dominio `logs` no lleva FK a propósito (particiones + alta escritura).
 - Tablas-libro (`stock_movements`, `payments`, `cash_movements`, …) son
   inmutables: corregir = crear el movimiento contrario, un AJUSTE o un conteo
   físico (`inventory_counts`) que lo genere.
 - Stock y dinero **nunca** se guardan como saldos editables: se derivan de eventos.
+- `logs`: particionado mensual por `created_at` (PK incluye la clave de
+  partición), retención = `DROP` de partición vía
+  `logs.drop_partitions_older_than(n)`, escritura asíncrona desde el server y
+  redacción previa (headers sensibles fuera; bodies de `/auth/*` y
+  `/enrollment` jamás). Backups críticos pueden excluirlo:
+  `pg_dump --exclude-schema=logs`.

@@ -7,11 +7,11 @@
 -- cálculo — no hay que reclasificar el catálogo entero.
 -- =============================================================================
 
-CREATE TYPE tax_affectation AS ENUM (
+CREATE TYPE catalog.tax_affectation AS ENUM (
     'GRAVADO',
     'EXONERADO',
     'INAFECTO'
 );
 
-COMMENT ON TYPE tax_affectation IS
+COMMENT ON TYPE catalog.tax_affectation IS
     'Afectación IGV de un producto: GRAVADO (18 % contenido en el precio), EXONERADO (Apéndice I, tasa 0) o INAFECTO. Los precios de venta son finales: el IGV va contenido, nunca se suma encima.';
