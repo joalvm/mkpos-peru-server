@@ -12,37 +12,37 @@
 -- =============================================================================
 
 CREATE TRIGGER trg_business_settings__set_updated_at
-    BEFORE UPDATE ON business_settings
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-COMMENT ON TRIGGER trg_business_settings__set_updated_at ON business_settings IS
+    BEFORE UPDATE ON org.business_settings
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+COMMENT ON TRIGGER trg_business_settings__set_updated_at ON org.business_settings IS
     'Mantiene business_settings.updated_at en cada modificación.';
 
 CREATE TRIGGER trg_business_settings__set_updated_seq
-    BEFORE UPDATE ON business_settings
-    FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
-COMMENT ON TRIGGER trg_business_settings__set_updated_seq ON business_settings IS
+    BEFORE UPDATE ON org.business_settings
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_seq();
+COMMENT ON TRIGGER trg_business_settings__set_updated_seq ON org.business_settings IS
     'Avanza business_settings.updated_seq; los cambios de configuración (nombre, pie de ticket, formalización) llegan al POS en el siguiente pull.';
 
 CREATE TRIGGER trg_warehouses__set_updated_at
-    BEFORE UPDATE ON warehouses
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-COMMENT ON TRIGGER trg_warehouses__set_updated_at ON warehouses IS
+    BEFORE UPDATE ON org.warehouses
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+COMMENT ON TRIGGER trg_warehouses__set_updated_at ON org.warehouses IS
     'Mantiene warehouses.updated_at en cada modificación.';
 
 CREATE TRIGGER trg_warehouses__set_updated_seq
-    BEFORE UPDATE ON warehouses
-    FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
-COMMENT ON TRIGGER trg_warehouses__set_updated_seq ON warehouses IS
+    BEFORE UPDATE ON org.warehouses
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_seq();
+COMMENT ON TRIGGER trg_warehouses__set_updated_seq ON org.warehouses IS
     'Avanza warehouses.updated_seq; el POS conoce el almacén de su sucursal vía pull.';
 
 CREATE TRIGGER trg_branches__set_updated_at
-    BEFORE UPDATE ON branches
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-COMMENT ON TRIGGER trg_branches__set_updated_at ON branches IS
+    BEFORE UPDATE ON org.branches
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+COMMENT ON TRIGGER trg_branches__set_updated_at ON org.branches IS
     'Mantiene branches.updated_at en cada modificación.';
 
 CREATE TRIGGER trg_branches__set_updated_seq
-    BEFORE UPDATE ON branches
-    FOR EACH ROW EXECUTE FUNCTION set_updated_seq();
-COMMENT ON TRIGGER trg_branches__set_updated_seq ON branches IS
+    BEFORE UPDATE ON org.branches
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_seq();
+COMMENT ON TRIGGER trg_branches__set_updated_seq ON org.branches IS
     'Avanza branches.updated_seq para que el cambio (incluida la reasignación de almacén) entre en el próximo pull de las terminales.';

@@ -1,6 +1,6 @@
 -- Tipo de movimiento de inventario. El stock nunca se edita a mano: es la suma
 -- de estos movimientos (ver vista stock_levels); corregir = crear AJUSTE.
-CREATE TYPE movement_type AS ENUM (
+CREATE TYPE inventory.movement_type AS ENUM (
     'VENTA',            -- salida por venta (cantidad negativa)
     'ANULACION_VENTA',  -- reingreso por venta anulada (cantidad positiva)
     'COMPRA',           -- ingreso por compra recibida (cantidad positiva)
@@ -8,5 +8,5 @@ CREATE TYPE movement_type AS ENUM (
     'MERMA'             -- pérdida: vencido, roto, robado (cantidad negativa, exige motivo)
 );
 
-COMMENT ON TYPE movement_type IS
+COMMENT ON TYPE inventory.movement_type IS
     'Tipo de movimiento del libro mayor de inventario (stock_movements); el signo de la cantidad está restringido por CHECK según el tipo.';

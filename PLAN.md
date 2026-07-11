@@ -1,6 +1,7 @@
 # PLAN server — API central Go (para IA ejecutora)
 
-Telegráfico a propósito. Ejecuta en orden T1→T14. Protocolo obligatorio e
+Telegráfico a propósito. Ejecuta en orden T1→T15 (T16-T17 diferidas a F2+,
+ver INDEX). Protocolo obligatorio e
 invariantes (redondeo, contrato sync, formatos JSON): `../docs/plans/INDEX.md`.
 Verdad del proyecto: `../docs/PROYECTO.md` §§ 2, 4, 5, 6, 7 — leer ANTES de T1.
 Esquema BD YA existe, validado, intocable sin actualizar PROYECTO.md § 6:
@@ -18,6 +19,8 @@ Esquema BD YA existe, validado, intocable sin actualizar PROYECTO.md § 6:
 8. Jamás loggear: passwords, PINs, tokens, secrets, hashes, cuerpos de /auth. Request-id sí.
 9. Toda ruta declara su permiso o su tipo de auth. Cero endpoints "abiertos" salvo /health y /enrollment (rate-limited).
 10. Errores wrapped `%w` con contexto. RFC 7807 hacia fuera, `detail` en español.
+11. Esquemas por dominio (PROYECTO § 6): TODA referencia SQL calificada `esquema.tabla` (`org.branches`, `sales.sales`) — DDL, queries sqlc y seeds; nada de search_path. En `public` solo extensiones y funciones infra.
+12. Respuestas según INDEX: paginación `?page=&per_page=` + meta Laravel-style; listados acotados = array pelado (decisión día 1, JAMÁS muta); errores RFC 7807 + extensiones `code`/`trace_id`/`errors[]`/`debug`(solo dev).
 
 ## Stack fijo
 
@@ -41,11 +44,16 @@ server/
 │   │                          # refresh rotation, lockout, m2m client_credentials
 │   ├── domain/                # PURO: redondeo, arqueo, igv, transiciones purchase, validación venta
 │   ├── store/                 # GENERADO por sqlc — no editar
-│   └── sync/                  # push: apply por event_type (una tx c/u); pull: snapshot/deltas
+│   ├── sync/                  # push: apply por event_type (una tx c/u); pull: snapshot/deltas
+│   ├── requestlog/            # T13: middleware + writer async → esquema logs; janitor de particiones
+│   ├── notify/                # T16 (diferida): campanita — fanout a notifications.notifications
+│   ├── reports/               # T17 (diferida): registro de kinds + workers SKIP LOCKED
+│   └── storage/               # T17 (diferida): archivos generados; v1 disco (MKPOS_STORAGE_DIR)
 ├── db/queries/*.sql           # fuente sqlc: un archivo por dominio (branches.sql, sales.sql…)
 ├── database/                  # esquema (existe) + seeds/dev.sql (T3)
 ├── docker-compose.yml         # SOLO dev: postgres:18-alpine
 ├── Taskfile.yml · sqlc.yaml · .env.example · .golangci.yml
+├── postman/                   # GENERADO: task api:postman (colección por dominio + environment)
 └── openapi.yaml               # GENERADO por huma; SE COMMITEA (contrato para apps)
 ```
 
@@ -93,9 +101,16 @@ GET  /sales?branch_id&from&to&status&terminal_id · GET /sales/{id}  (sales.read
 GET  /cash-sessions?branch_id&from&to · GET /cash-sessions/{id}     (cash.read)
 GET  /reports/sales-daily|top-products|cash-differences|margin      (reports.read)
 POST /sync/push · GET /sync/pull?cursor=      (RequireTerminal, scopes sync)
+POST/GET /reports · GET /reports/{id}[,/download]  (reports.read; T17 — exports pesados async; los 4 reportes de T9 SIGUEN síncronos)
+GET  /notifications?unread_only= · GET /notifications/unread-count   (RequireUser; T16 — cada quien SOLO las suyas)
+POST /notifications/{id}/read · POST /notifications/read-all         (RequireUser; T16)
 ```
 
-Paginación listados: cursor `?limit=&after=` (after = id); default 50, máx 200.
+Paginación listados: `?page=&per_page=` (default 50, máx 200) →
+`{data, meta:{per_page, current_page, from, to, last_page, total}}`.
+Listados acotados = array pelado SIN envelope, SOLO: branches, warehouses,
+roles, permissions, product-categories, terminals (la forma por endpoint se
+decide día 1 y JAMÁS muta — INDEX). El pull de sync mantiene su cursor.
 Soft delete = PATCH `is_active:false`. Sin DELETE físico en ningún recurso.
 
 ## Tareas
@@ -106,15 +121,17 @@ postgres:18-alpine, user/pass/db `mkpos`, puerto 5432, volumen pgdata +
 `./database:/database:ro`, healthcheck pg_isready. `.env.example` con todas las
 MKPOS_* documentadas (JWT key vacía = autogenerar en dev a `.jwtkey` gitignored).
 Taskfile: `setup`, `dev` (air), `build`, `test`, `lint`, `db:reset`, `db:seed:dev`,
-`db:psql`, `generate`. `db:reset` = drop schema public cascade + create →
-`psql -f /database/init.sql` → `-f /database/seeds/system.sql`.
+`db:psql`, `generate`. `db:reset` = drop CASCADE de los 13 esquemas de dominio (org…logs) + public,
+recrear public → `psql -f /database/init.sql` → `-f /database/seeds/system.sql`.
 .gitignore (bin, .env, .jwtkey). .golangci.yml estándar estricto.
 DoD: `docker compose up -d && task db:reset` verde desde clon; `task lint` verde.
 
 ### T2 — sqlc
 sqlc.yaml: engine postgresql; schema = `database/` (lee DDL completo); queries
 `db/queries/`; out `internal/store`; sql_package pgx/v5; overrides: uuid →
-google/uuid, numeric → shopspring/decimal. Query smoke `GetBranch` + main
+google/uuid, numeric → shopspring/decimal. Queries SIEMPRE calificadas
+`esquema.tabla` (regla 11): sqlc resuelve lo no calificado contra public,
+donde no hay tablas. Query smoke `GetBranch` (org.branches) + main
 mínimo `/health` (huma sobre chi, ping pool).
 DoD: `task generate` produce store compilable; `curl /health` → `{"status":"ok"}`.
 
@@ -149,10 +166,18 @@ devuelve filas con branch_id y warehouse_id coherentes.
 huma v2 + chi. Versionado `/api/v1`. Middleware en orden: request-id → slog
 (método, ruta, status, dur, request-id; NUNCA bodies de auth) → recover →
 CORS (origins de config; en dev `*`) → timeouts (read 10s, write 30s, idle 120s).
-Errores RFC 7807 huma, `detail` español. Graceful shutdown (SIGTERM, drain 15s).
+Errores RFC 7807 huma con extensiones (regla 12): `code` estable por tipo,
+`trace_id` = request-id (header `X-Request-Id` en TODA respuesta), `errors[]`
+de huma en validación, `debug` (trace) solo `MKPOS_ENV=dev`; `detail`
+español. Graceful shutdown (SIGTERM, drain 15s).
 `task generate` vuelca openapi a `./openapi.yaml` (composición: arranca server
-en modo export o usa huma CLI API) y se commitea.
-DoD: openapi.yaml generado y commiteado; headers de error correctos; test smoke.
+en modo export o usa huma CLI API) y se commitea. Tags de huma por dominio
+(los usa el export Postman). `task api:postman`: `npx openapi-to-postmanv2
+-s openapi.yaml -o postman/mkpos.postman_collection.json -O
+folderStrategy=Tags` + environment con {{base_url}}, {{access_token}},
+{{terminal_token}}; se commitea (npx = tooling dev, no dependencia Go).
+DoD: openapi.yaml y postman/ generados y commiteados; headers de error
+correctos (X-Request-Id presente); test smoke.
 
 ### T5 — Auth humanos
 `internal/auth`: argon2id (params regla 4), JWT EdDSA access 15 min, claims
@@ -346,7 +371,29 @@ logs (test que loggea y asserta ausencia). pgx pool: max conns config (default 1
 health check period.
 DoD: `task lint` limpio; tests de rate limit y headers.
 
-### T13 — Suite integración E2E-repo
+### T13 — Logs de requests (esquema logs)
+`internal/requestlog`: middleware que captura método, route (patrón), path,
+status, duración, ip, subject (user|terminal del JWT) y satélites (query,
+body solo en mutaciones, headers, user-agent, error, body de respuesta solo
+con status ≥ 400) → canal buffered → writer batch (INSERT multirow cada ~1 s
+o 100 filas). Canal lleno = descartar y contar (WARN slog): el request path
+JAMÁS espera al log.
+- Redacción ANTES de insertar: denylist headers (authorization, cookie,
+  set-cookie, x-api-key…); bodies de `/auth/*` y `/enrollment` JAMÁS
+  (regla 8); body > MKPOS_LOGS_MAX_BODY_KB (default 32) truncado + flag.
+- Opt-in por ruta al registrarla; `/health` nunca; pulls de sync sin cambios
+  no se loguean por default (config).
+- Janitor diario (goroutine + ticker): `logs.ensure_partitions(1)` +
+  `logs.drop_partitions_older_than(MKPOS_LOGS_RETENTION_MONTHS, default 3)`.
+- Config: MKPOS_LOGS_ENABLED (default true), retención, max body.
+- `X-Request-Id` de la respuesta = `logs.requests.id` = `trace_id` de los
+  errores RFC 7807: correlación directa al depurar.
+Tests: request logueado con sus satélites; login NO deja body y authorization
+ausente de headers; canal lleno no bloquea el handler; janitor crea la
+partición del mes siguiente; trace_id de un error == fila en logs.requests.
+DoD: suite verde.
+
+### T14 — Suite integración E2E-repo
 `internal/api/e2e_test.go` (build tag `e2e`; `task test:e2e`): levanta server
 contra BD compose con schema fresco, corre EL flujo completo real:
 db:reset → seeds → login admin → crea branch+terminal → enrollment-code →
@@ -355,7 +402,7 @@ INDEX) → GET /sales la muestra → push void → stock vuelve → abre/cierra 
 con arqueo → reportes cuadran. Asserts numéricos exactos céntimo a céntimo.
 DoD: `task test && task test:e2e` verdes desde clon limpio.
 
-### T14 — Cierre F1 backend
+### T15 — Cierre F1 backend
 README server real (comandos, env vars, estructura, cómo correr tests).
 openapi.yaml final regenerado + commiteado. `task generate` idempotente (diff
 limpio si nada cambió). CI GitHub Actions `.github/workflows/ci.yml`: postgres
@@ -366,3 +413,44 @@ de dominios, deudas anotadas.
 DoD global: `docker compose up -d && task setup && task db:reset && task
 db:seed:dev && task test && task test:e2e && task lint` todo verde desde clon
 limpio. openapi.yaml refleja TODOS los endpoints.
+
+---
+
+## Tareas diferidas (F2+; INDEX las ordena — ejecutar antes de la primera pantalla que las consuma)
+
+### T16 — Notificaciones (campanita)
+`internal/notify`: `Notify(userID, type, title, body?, data)` → fila en
+notifications.notifications (fanout-on-write: una fila por destinatario).
+Registro de tipos en código: REPORTE_LISTO, STOCK_BAJO… (valores español,
+PROYECTO § 6). Sin push FCM (decisión F3) ni SSE (aditivo futuro): entrega =
+polling del cliente (TanStack Query 30-60 s + focus).
+Endpoints (RequireUser; cada quien SOLO las suyas — ajena = 404, no filtrar
+existencia): `GET /notifications` (paginado, `?unread_only=`) ·
+`GET /notifications/unread-count` · `POST /notifications/{id}/read`
+(idempotente) · `POST /notifications/read-all`.
+Tests: fanout a N destinatarios crea N filas; read idempotente; read-all;
+unread-count cuadra; notificación ajena 404.
+DoD: suite verde; openapi + postman regenerados.
+
+### T17 — Reportes en segundo plano (esquema reports; depende de T16)
+`internal/reports`: registro de kinds (código español — VENTAS_MENSUAL,
+KARDEX_PRODUCTO… — con validador de params y generador) + pool de workers
+(goroutines del binario, MKPOS_REPORTS_WORKERS default 2): toman la fila
+PENDIENTE más antigua con `FOR UPDATE SKIP LOCKED` → EN_PROCESO → generan
+archivo vía `internal/storage` (v1 disco: MKPOS_STORAGE_DIR) → COMPLETADO
+(file_*) → `notify` REPORTE_LISTO al solicitante. Error transitorio:
+attempts++ con reintento interno (máx 3, backoff) → FALLIDO con error
+legible. Graceful shutdown drena el worker; al arrancar, EN_PROCESO
+huérfanos → FALLIDO "interrumpido" (el usuario re-solicita; simple v1).
+Janitor: borra archivos con expires_at vencido (la fila queda; download
+vencido = 410).
+Endpoints: `POST /reports` {kind, params} valida contra el registro ANTES de
+encolar (inválido = 422 sin fila) → 202 + reporte · `GET /reports` (míos,
+paginado) · `GET /reports/{id}` (poll de estado) · `GET /reports/{id}/download`
+(solo COMPLETADO no vencido). Formato v1: CSV (encoding/csv); XLSX (excelize)
+recién cuando una pantalla lo pida. Los reportes rápidos de T9 SIGUEN
+síncronos: esto es para exports pesados.
+Tests: flujo encolar→worker→archivo→notificación; 2 workers no toman la misma
+fila (SKIP LOCKED); kind inválido 422 sin encolar; download ajeno 404;
+vencido 410; fallo deja FALLIDO + error legible; arranque rescata huérfanos.
+DoD: suite verde; openapi + postman regenerados.

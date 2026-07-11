@@ -3,7 +3,7 @@
 -- =============================================================================
 
 CREATE TRIGGER trg_cash_sessions__set_updated_at
-    BEFORE UPDATE ON cash_sessions
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-COMMENT ON TRIGGER trg_cash_sessions__set_updated_at ON cash_sessions IS
+    BEFORE UPDATE ON cash.cash_sessions
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+COMMENT ON TRIGGER trg_cash_sessions__set_updated_at ON cash.cash_sessions IS
     'Mantiene cash_sessions.updated_at (cambia al cerrar la sesión).';

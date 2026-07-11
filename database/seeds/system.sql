@@ -14,7 +14,7 @@ BEGIN;
 
 -- --- Roles base (códigos en español, regla del proyecto) ---------------------
 
-INSERT INTO roles (code, name, description, is_system) VALUES
+INSERT INTO access.roles (code, name, description, is_system) VALUES
     ('PROPIETARIO', 'Propietario',
      'Dueña del negocio: acceso total a todas las sucursales y configuración.', true),
     ('ENCARGADO', 'Encargado de tienda',
@@ -30,7 +30,7 @@ ON CONFLICT (code) DO UPDATE
 -- Códigos en inglés: son identificadores técnicos ligados a endpoints
 -- (PROYECTO.md § 4), a diferencia de los enums de negocio.
 
-INSERT INTO permissions (code, description) VALUES
+INSERT INTO access.permissions (code, description) VALUES
     -- Sucursales y almacenes
     ('branches.read',    'Ver sucursales.'),
     ('branches.manage',  'Crear y editar sucursales (incluye asignarles almacén).'),
@@ -84,20 +84,20 @@ ON CONFLICT (code) DO UPDATE
 
 -- PROPIETARIO: todos los permisos, siempre (a propósito un CROSS JOIN: cualquier
 -- permiso nuevo que entre al catálogo le queda otorgado automáticamente).
-INSERT INTO role_permissions (role_id, permission_id)
+INSERT INTO access.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
-FROM roles r
-CROSS JOIN permissions p
+FROM access.roles r
+CROSS JOIN access.permissions p
 WHERE r.code = 'PROPIETARIO'
 ON CONFLICT DO NOTHING;
 
 -- ENCARGADO: opera su tienda completa; NO gestiona sucursales, usuarios, roles
 -- ni terminales (sí puede generar códigos de enrolamiento). Lista positiva a
 -- propósito: un permiso nuevo no se otorga solo.
-INSERT INTO role_permissions (role_id, permission_id)
+INSERT INTO access.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
-FROM roles r
-JOIN permissions p ON p.code IN (
+FROM access.roles r
+JOIN access.permissions p ON p.code IN (
     'branches.read',
     'warehouses.read',
     'users.read',
@@ -119,10 +119,10 @@ WHERE r.code = 'ENCARGADO'
 ON CONFLICT DO NOTHING;
 
 -- CAJERO: vender y manejar su caja; lectura de lo necesario para operar.
-INSERT INTO role_permissions (role_id, permission_id)
+INSERT INTO access.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
-FROM roles r
-JOIN permissions p ON p.code IN (
+FROM access.roles r
+JOIN access.permissions p ON p.code IN (
     'product_categories.read',
     'brands.read',
     'products.read',
@@ -138,7 +138,7 @@ ON CONFLICT DO NOTHING;
 -- Fila única con valores iniciales seguros: negocio informal, IGV 18 % latente.
 -- ON CONFLICT DO NOTHING: nunca pisar lo que la dueña ya configuró.
 
-INSERT INTO business_settings (id, trade_name, receipt_footer) VALUES
+INSERT INTO org.business_settings (id, trade_name, receipt_footer) VALUES
     (true, 'Minimarket', '¡Gracias por su compra!')
 ON CONFLICT (id) DO NOTHING;
 

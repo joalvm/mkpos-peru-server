@@ -5,7 +5,7 @@
 -- Las FK viven en tables/99_relations.sql.
 -- =============================================================================
 
-CREATE TABLE suppliers (
+CREATE TABLE purchases.suppliers (
     id           uuid        NOT NULL DEFAULT uuidv7(),
     name         text        NOT NULL,
     ruc          text        NULL,
@@ -20,25 +20,25 @@ CREATE TABLE suppliers (
     CONSTRAINT ck_suppliers__ruc_format CHECK (ruc IS NULL OR ruc ~ '^[0-9]{11}$')
 );
 
-COMMENT ON TABLE suppliers IS
+COMMENT ON TABLE purchases.suppliers IS
     'Proveedores: distribuidoras de Piura (Alvarez Bohl, Kompass…) y, opcionalmente, puestos frecuentes del mercado mayorista. A quién se le compra cada producto y a qué costo se deriva del historial de purchase_items (no hay catálogo producto-proveedor a propósito).';
-COMMENT ON COLUMN suppliers.id IS 'Identificador único (UUIDv7).';
-COMMENT ON COLUMN suppliers.name IS 'Nombre comercial del proveedor.';
-COMMENT ON COLUMN suppliers.ruc IS 'RUC del proveedor (11 dígitos); único cuando existe. NULL para puestos informales del mayorista.';
-COMMENT ON COLUMN suppliers.contact_name IS 'Nombre del vendedor o contacto que toma los pedidos; opcional.';
-COMMENT ON COLUMN suppliers.phone IS 'Teléfono para hacer pedidos; opcional.';
-COMMENT ON COLUMN suppliers.address IS 'Dirección del proveedor; opcional.';
-COMMENT ON COLUMN suppliers.is_active IS 'false = ya no se le compra; se conserva por el historial de compras.';
-COMMENT ON COLUMN suppliers.created_at IS 'Fecha de creación del registro.';
-COMMENT ON COLUMN suppliers.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
+COMMENT ON COLUMN purchases.suppliers.id IS 'Identificador único (UUIDv7).';
+COMMENT ON COLUMN purchases.suppliers.name IS 'Nombre comercial del proveedor.';
+COMMENT ON COLUMN purchases.suppliers.ruc IS 'RUC del proveedor (11 dígitos); único cuando existe. NULL para puestos informales del mayorista.';
+COMMENT ON COLUMN purchases.suppliers.contact_name IS 'Nombre del vendedor o contacto que toma los pedidos; opcional.';
+COMMENT ON COLUMN purchases.suppliers.phone IS 'Teléfono para hacer pedidos; opcional.';
+COMMENT ON COLUMN purchases.suppliers.address IS 'Dirección del proveedor; opcional.';
+COMMENT ON COLUMN purchases.suppliers.is_active IS 'false = ya no se le compra; se conserva por el historial de compras.';
+COMMENT ON COLUMN purchases.suppliers.created_at IS 'Fecha de creación del registro.';
+COMMENT ON COLUMN purchases.suppliers.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
 
 
-CREATE TABLE purchases (
+CREATE TABLE purchases.purchases (
     id               uuid            NOT NULL DEFAULT uuidv7(),
     warehouse_id     uuid            NOT NULL,
     supplier_id      uuid            NULL,
-    kind             purchase_kind   NOT NULL,
-    status           purchase_status NOT NULL,
+    kind             purchases.purchase_kind   NOT NULL,
+    status           purchases.purchase_status NOT NULL,
     doc_reference    text            NULL,
     ordered_at       timestamptz     NULL,
     received_at      timestamptz     NULL,
@@ -68,25 +68,25 @@ CREATE TABLE purchases (
     )
 );
 
-COMMENT ON TABLE purchases IS
+COMMENT ON TABLE purchases.purchases IS
     'Compras de mercadería. MAYORISTA: se compra y recibe en el acto (nace RECIBIDA, proveedor opcional). DISTRIBUIDORA: pedido que llega días después (PEDIDA → RECIBIDA | CANCELADA, proveedor obligatorio). Pasar a RECIBIDA genera los movimientos de stock COMPRA (en unidad base: cantidad × factor de cada línea).';
-COMMENT ON COLUMN purchases.id IS 'Identificador único (UUIDv7).';
-COMMENT ON COLUMN purchases.warehouse_id IS 'Almacén donde entra la mercadería (por defecto el asignado a la sucursal que compra: branches.warehouse_id).';
-COMMENT ON COLUMN purchases.supplier_id IS 'Proveedor; obligatorio para DISTRIBUIDORA (CHECK), opcional para MAYORISTA.';
-COMMENT ON COLUMN purchases.kind IS 'Modalidad de compra: MAYORISTA o DISTRIBUIDORA; define el ciclo de estados permitido.';
-COMMENT ON COLUMN purchases.status IS 'Estado del ciclo de vida; solo el paso a RECIBIDA ingresa stock.';
-COMMENT ON COLUMN purchases.doc_reference IS 'Referencia del documento del proveedor (nro. de factura o guía) para conciliar; opcional.';
-COMMENT ON COLUMN purchases.ordered_at IS 'Fecha del pedido; obligatoria para DISTRIBUIDORA, NULL para MAYORISTA (no hay pedido previo).';
-COMMENT ON COLUMN purchases.received_at IS 'Fecha de recepción de la mercadería; NOT NULL exactamente cuando status = RECIBIDA (CHECK).';
-COMMENT ON COLUMN purchases.total_cents IS 'Costo total de la mercadería en céntimos (Σ purchase_items.total_cents, mantenido por la aplicación). NO incluye la percepción.';
-COMMENT ON COLUMN purchases.perception_cents IS 'Percepción de IGV cobrada por el proveedor en el comprobante (Régimen de Percepciones SUNAT: típico 2 % en gaseosas/agua/cerveza comprada a distribuidoras). Se registra aparte del costo: pagado = total + percepción; al formalizarse el negocio es crédito aplicable contra el IGV. 0 si el comprobante no trae percepción.';
-COMMENT ON COLUMN purchases.note IS 'Observación libre (condiciones, faltantes, motivo de cancelación).';
-COMMENT ON COLUMN purchases.created_by IS 'Usuario que registró la compra.';
-COMMENT ON COLUMN purchases.created_at IS 'Fecha de creación del registro.';
-COMMENT ON COLUMN purchases.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
+COMMENT ON COLUMN purchases.purchases.id IS 'Identificador único (UUIDv7).';
+COMMENT ON COLUMN purchases.purchases.warehouse_id IS 'Almacén donde entra la mercadería (por defecto el asignado a la sucursal que compra: branches.warehouse_id).';
+COMMENT ON COLUMN purchases.purchases.supplier_id IS 'Proveedor; obligatorio para DISTRIBUIDORA (CHECK), opcional para MAYORISTA.';
+COMMENT ON COLUMN purchases.purchases.kind IS 'Modalidad de compra: MAYORISTA o DISTRIBUIDORA; define el ciclo de estados permitido.';
+COMMENT ON COLUMN purchases.purchases.status IS 'Estado del ciclo de vida; solo el paso a RECIBIDA ingresa stock.';
+COMMENT ON COLUMN purchases.purchases.doc_reference IS 'Referencia del documento del proveedor (nro. de factura o guía) para conciliar; opcional.';
+COMMENT ON COLUMN purchases.purchases.ordered_at IS 'Fecha del pedido; obligatoria para DISTRIBUIDORA, NULL para MAYORISTA (no hay pedido previo).';
+COMMENT ON COLUMN purchases.purchases.received_at IS 'Fecha de recepción de la mercadería; NOT NULL exactamente cuando status = RECIBIDA (CHECK).';
+COMMENT ON COLUMN purchases.purchases.total_cents IS 'Costo total de la mercadería en céntimos (Σ purchase_items.total_cents, mantenido por la aplicación). NO incluye la percepción.';
+COMMENT ON COLUMN purchases.purchases.perception_cents IS 'Percepción de IGV cobrada por el proveedor en el comprobante (Régimen de Percepciones SUNAT: típico 2 % en gaseosas/agua/cerveza comprada a distribuidoras). Se registra aparte del costo: pagado = total + percepción; al formalizarse el negocio es crédito aplicable contra el IGV. 0 si el comprobante no trae percepción.';
+COMMENT ON COLUMN purchases.purchases.note IS 'Observación libre (condiciones, faltantes, motivo de cancelación).';
+COMMENT ON COLUMN purchases.purchases.created_by IS 'Usuario que registró la compra.';
+COMMENT ON COLUMN purchases.purchases.created_at IS 'Fecha de creación del registro.';
+COMMENT ON COLUMN purchases.purchases.updated_at IS 'Fecha de última modificación (mantenida por trigger).';
 
 
-CREATE TABLE purchase_items (
+CREATE TABLE purchases.purchase_items (
     id                      uuid          NOT NULL DEFAULT uuidv7(),
     purchase_id             uuid          NOT NULL,
     product_id              uuid          NOT NULL,
@@ -104,15 +104,15 @@ CREATE TABLE purchase_items (
     CONSTRAINT ck_purchase_items__costs_non_negative CHECK (unit_cost_cents >= 0 AND total_cents >= 0)
 );
 
-COMMENT ON TABLE purchase_items IS
+COMMENT ON TABLE purchases.purchase_items IS
     'Líneas de una compra: qué presentaciones (caja x24, saco 50 kg), cuántas y a qué costo. Es la fuente del costo real histórico; el costo de referencia por unidad base (products.cost_cents = unit_cost ÷ factor) lo recalcula la aplicación al recibir. El stock ingresa en unidad base: cantidad × factor.';
-COMMENT ON COLUMN purchase_items.id IS 'Identificador único (UUIDv7).';
-COMMENT ON COLUMN purchase_items.purchase_id IS 'Compra a la que pertenece la línea.';
-COMMENT ON COLUMN purchase_items.product_id IS 'Producto comprado.';
-COMMENT ON COLUMN purchase_items.product_presentation_id IS 'Presentación comprada (caja, saco, plancha); su factor queda además congelado en esta fila.';
-COMMENT ON COLUMN purchase_items.presentation_name IS 'Nombre de la presentación al momento de comprar (snapshot: "Caja x 24").';
-COMMENT ON COLUMN purchase_items.factor IS 'Unidades base por presentación al momento de comprar (snapshot): el stock ingresado fue cantidad × factor y esa aritmética histórica no cambia si la presentación se redefine.';
-COMMENT ON COLUMN purchase_items.quantity IS 'Cantidad de presentaciones compradas (2 cajas, 1.5 sacos); admite fracciones.';
-COMMENT ON COLUMN purchase_items.unit_cost_cents IS 'Costo pagado por presentación, en céntimos.';
-COMMENT ON COLUMN purchase_items.total_cents IS 'Costo total de la línea en céntimos: cantidad × costo unitario, redondeado por la regla canónica única.';
-COMMENT ON COLUMN purchase_items.created_at IS 'Fecha de creación del registro.';
+COMMENT ON COLUMN purchases.purchase_items.id IS 'Identificador único (UUIDv7).';
+COMMENT ON COLUMN purchases.purchase_items.purchase_id IS 'Compra a la que pertenece la línea.';
+COMMENT ON COLUMN purchases.purchase_items.product_id IS 'Producto comprado.';
+COMMENT ON COLUMN purchases.purchase_items.product_presentation_id IS 'Presentación comprada (caja, saco, plancha); su factor queda además congelado en esta fila.';
+COMMENT ON COLUMN purchases.purchase_items.presentation_name IS 'Nombre de la presentación al momento de comprar (snapshot: "Caja x 24").';
+COMMENT ON COLUMN purchases.purchase_items.factor IS 'Unidades base por presentación al momento de comprar (snapshot): el stock ingresado fue cantidad × factor y esa aritmética histórica no cambia si la presentación se redefine.';
+COMMENT ON COLUMN purchases.purchase_items.quantity IS 'Cantidad de presentaciones compradas (2 cajas, 1.5 sacos); admite fracciones.';
+COMMENT ON COLUMN purchases.purchase_items.unit_cost_cents IS 'Costo pagado por presentación, en céntimos.';
+COMMENT ON COLUMN purchases.purchase_items.total_cents IS 'Costo total de la línea en céntimos: cantidad × costo unitario, redondeado por la regla canónica única.';
+COMMENT ON COLUMN purchases.purchase_items.created_at IS 'Fecha de creación del registro.';
