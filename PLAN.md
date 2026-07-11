@@ -60,7 +60,7 @@ GET  /auth/me                                 (RequireUser → user+roles+permis
 POST /auth/token                              (M2M client_credentials, rate-limit)
 POST /enrollment                              (público, rate-limit fuerte, canjea código)
 GET/POST/PATCH /branches[,/{id}]              (branches.read / branches.manage)
-GET  /warehouses?branch_id=                   (stock.read)
+GET/POST/PATCH /warehouses[,/{id}]            (warehouses.read / warehouses.manage)
 GET/POST/PATCH /users[,/{id}]                 (users.read / users.manage)
 PUT  /users/{id}/roles                        (users.manage; reemplaza set user_roles)
 POST /users/{id}/reset-password|reset-pin     (users.manage; genera temporal/valida formato)
@@ -70,8 +70,14 @@ GET  /permissions                             (roles.read)
 GET/POST/PATCH /terminals[,/{id}]             (terminals.read / terminals.manage)
 POST /terminals/{id}/enrollment-codes         (terminals.enroll; invalida código previo no usado)
 POST /terminals/{id}/revoke                   (terminals.manage; REVOCADO + revoca credenciales)
-GET/POST/PATCH /categories[,/{id}]            (categories.*)
-GET/POST/PATCH /products[,/{id}]              (products.*; GET ?q= trgm, ?barcode=, ?category_id=)
+GET/POST/PATCH /product-categories[,/{id}]    (product_categories.*)
+GET/POST/PATCH /brands[,/{id}]                (brands.*)
+GET/POST/PATCH /products[,/{id}]              (products.*; GET ?q= trgm, ?barcode= vía
+                                               product_barcodes, ?category_id=, ?brand_id=;
+                                               detail embebe presentations + barcodes)
+GET  /products/barcode-lookup?barcode=        (products.manage; proxy Open Food Facts)
+POST/PATCH /products/{id}/presentations[,/{pid}]                 (products.manage)
+POST/PATCH /products/{id}/presentations/{pid}/barcodes[,/{bid}]  (products.manage)
 GET/POST/PATCH /customers[,/{id}]             (customers.*; GET ?doc= búsqueda exacta)
 GET/POST/PATCH /suppliers[,/{id}]             (suppliers.*)
 GET  /settings · PATCH /settings              (settings.read / settings.manage)
@@ -80,6 +86,9 @@ POST /purchases/{id}/receive|/cancel          (purchases.manage; transición inv
 GET  /stock?branch_id=|warehouse_id=&low=     (stock.read; desde stock_levels + join products)
 GET  /products/{id}/kardex?warehouse_id=&from=&to=  (stock.read)
 POST /stock/adjustments                       (stock.adjust; AJUSTE|MERMA server-side)
+GET/POST /inventory-counts · GET /inventory-counts/{id}   (stock.read / stock.adjust)
+PUT  /inventory-counts/{id}/items             (stock.adjust; upsert counted_qty)
+POST /inventory-counts/{id}/apply|/cancel     (stock.adjust; genera AJUSTEs / cancela)
 GET  /sales?branch_id&from&to&status&terminal_id · GET /sales/{id}  (sales.read)
 GET  /cash-sessions?branch_id&from&to · GET /cash-sessions/{id}     (cash.read)
 GET  /reports/sales-daily|top-products|cash-differences|margin      (reports.read)
@@ -113,19 +122,26 @@ DoD: `task generate` produce store compilable; `curl /health` → `{"status":"ok
 `cmd/hashgen`: `hashgen argon2 "texto"` / `hashgen sha256 "texto"`.
 `database/seeds/dev.sql` idempotente (ON CONFLICT DO NOTHING, ids fijos UUIDv7
 literales para reproducibilidad):
-- 2 branches S01 "Centro", S02 "Norte" + warehouse default c/u (A-S01, A-S02).
+- warehouses PRIMERO (branches.warehouse_id NOT NULL): A-S01, A-S02 → luego
+  2 branches S01 "Centro" (→A-S01), S02 "Norte" (→A-S02).
 - users: `admin` PROPIETARIO global (pass `Admin123!`, pin `9999`), `encargado1`
   ENCARGADO@S01 (pass `Encargado123!`, pin `1111`), `cajero1`/`cajero2`
   CAJERO@S01 (solo pin `1234`/`5678`). Hashes precomputados; plaintext en
   comentario SQL (solo dev).
-- 8 categorías; ~40 productos minimarket piurano: barcode UNIDAD (gaseosas,
-  galletas, atún), granel KG (arroz, azúcar, menestras — tax_affectation
-  EXONERADO donde aplique: frutas/verduras frescas), aceite L, DOCENA huevos,
-  1 producto is_open_price "VARIOS" (precio 0); min_stock en ~10.
+- 8 product_categories + ~6 brands (Coca-Cola, Gloria, Costeño, Laive, San
+  Fernando, Alicorp); ~40 productos minimarket piurano en 3 capas: cada
+  producto con presentación base (factor 1, default venta) + barcode donde
+  aplique; gaseosa con presentaciones extra Six-pack ×6 (vendible, barcode
+  propio) y Caja ×24 (solo compra, barcode propio); granel KG (arroz, azúcar,
+  menestras — tax_affectation EXONERADO donde aplique: frutas/verduras
+  frescas), aceite L, huevos presentación "Docena" factor 12 (enum DOCENA ya
+  no existe), 1 producto is_open_price "VARIOS" (precio 0), bolsa
+  icbper_applies=true; min_stock en ~10.
 - 3 suppliers (Alvarez Bohl RUC, Kompass RUC, "Mercado mayorista" sin RUC).
 - 1 terminal por branch, code GLOBAL único `S01-T01`, `S02-T01` (PENDIENTE).
-- 2 customers (DNI, RUC). 1 purchase MAYORISTA RECIBIDA por branch con items →
-  stock_movements COMPRA (warehouse default, occurred_at = received_at).
+- 2 customers (DNI, RUC). 1 purchase MAYORISTA RECIBIDA por branch con items
+  POR PRESENTACIÓN (caja ×24 gaseosa, saco ×50 arroz) → stock_movements COMPRA
+  en unidad base (qty × factor; warehouse de la branch, occurred_at = received_at).
 DoD: `task db:reset && task db:seed:dev` verde; `SELECT * FROM stock_levels`
 devuelve filas con branch_id y warehouse_id coherentes.
 
@@ -191,28 +207,48 @@ DoD: suite verde.
 Todos con RequireUser + permiso del mapa. Validación huma (formatos DNI 8, RUC 11,
 email, PIN, precios ≥ 0). Unique violado → 409 con mensaje claro español.
 Particularidades:
-- `POST /branches`: crea branch + su warehouse default (code `A-`+branch.code,
-  name "Almacén "+name, is_default true) en UNA tx. Respuesta embebe
-  `default_warehouse_id`. GET también.
-- `PATCH /branches/{id}` is_active:false NO desactiva warehouses (histórico intacto).
+- `POST /branches`: body trae `warehouse_id` (existente) XOR `warehouse:{code,name}`
+  inline (el switch "crear almacén para esta sucursal" del admin) — ambos o
+  ninguno = 422. Inline: crea warehouse + branch en UNA tx. Respuesta embebe
+  siempre `warehouse_id`. Permite: 1 almacén compartido por todas, varios
+  repartidos, o uno por sucursal.
+- `PATCH /branches/{id}` is_active:false NO desactiva warehouses (histórico
+  intacto; puede estar compartido). `PATCH` puede reapuntar `warehouse_id`
+  (config-rara; caveat offline documentado en INDEX).
 - users: create exige ≥1 de password/pin según rol previsto; reset-password/
   reset-pin devuelven el temporal UNA vez (quien resetea lo dicta al empleado).
 - roles: PATCH bloquea code/name de is_system (409); PUT permissions reemplaza set.
-- products: PATCH precio = editar sale_price_cents directo (catálogo es estado
-  vigente, no ledger); updated_seq avanza solo (trigger) → POS lo verá en pull.
+- products: `POST` auto-crea la presentación base (name = etiqueta de
+  base_unit p.ej. "Unidad"/"Kilo", factor 1, is_sellable, default venta y
+  compra; exige `sale_price_cents` del body → price_cents). Precios viven en
+  presentaciones: PATCH de la presentación (catálogo es estado vigente, no
+  ledger); updated_seq avanza solo (trigger) → POS lo verá en pull. Barcodes:
+  alta/baja por endpoints anidados; baja = is_active:false (sync necesita la
+  fila). Unicidad global del barcode violada → 409 diciendo QUÉ producto lo tiene.
+- `GET /products/barcode-lookup?barcode=`: proxy server→Open Food Facts
+  (`https://world.openfoodfacts.org/api/v2/product/{barcode}.json`, timeout 3s,
+  User-Agent propio). Respuesta `{found, name?, brand?, quantity?, category_hint?}`;
+  red caída o 404 → `{found:false}` (JAMÁS bloquea alta manual). Sin caché ni
+  imágenes (PROYECTO § 11).
 - settings: GET/PATCH business_settings (singleton). PATCH is_formalized:true
   exige ruc y legal_name presentes (422 si no) — la activación REAL del cálculo
-  la hace el POS al ver el flag por pull.
+  la hace el POS al ver el flag por pull. `icbper_cents` editable (≥ 0; tarifa
+  legal sube cada año).
 Tests por recurso: crear ok, validación 422, permiso 403, unique 409, paginación
 cursor estable, soft-delete oculta de listados default (`?include_inactive=` para verlos).
 DoD: suite verde; openapi regenerado commiteado.
 
 ### T8 — Compras y stock
 Transiciones en `internal/domain` (tabla explícita estado×acción).
-- `POST /purchases` {warehouse_id, kind, supplier_id?, doc_reference?, items[]}:
-  MAYORISTA → nace RECIBIDA + received_at + stock_movements COMPRA (+qty,
-  purchase_item_id, occurred_at=received_at, user=created_by) MISMA tx.
-  DISTRIBUIDORA → nace PEDIDA (ordered_at obligatorio), sin stock.
+- `POST /purchases` {warehouse_id, kind, supplier_id?, doc_reference?,
+  perception_cents?, items:[{product_presentation_id, quantity,
+  unit_cost_cents}]}: server valida presentación is_purchasable y snapshotea
+  presentation_name + factor. MAYORISTA → nace RECIBIDA + received_at +
+  stock_movements COMPRA en unidad base (+qty × factor, purchase_item_id,
+  occurred_at=received_at, user=created_by) MISMA tx. DISTRIBUIDORA → nace
+  PEDIDA (ordered_at obligatorio), sin stock. Al RECIBIR: refresca
+  products.cost_cents = half_up(unit_cost_cents ÷ factor) (costo referencial
+  por unidad base, último gana).
 - `POST /purchases/{id}/receive`: PEDIDA→RECIBIDA + movimientos (idem). Segunda
   vez → 409. `POST /purchases/{id}/cancel`: PEDIDA→CANCELADA; RECIBIDA no se
   cancela (409; corrección = AJUSTE).
@@ -226,8 +262,19 @@ Transiciones en `internal/domain` (tabla explícita estado×acción).
 - `POST /stock/adjustments` {warehouse_id, product_id, type AJUSTE|MERMA,
   quantity "±x.xxx", reason} (stock.adjust): inserta movimiento
   (occurred_at=now); signos: CHECK de BD manda (rechazo → 422 claro).
+- Conteos físicos (inventariado; sirve también de carga inicial de inventario):
+  `POST /inventory-counts` {warehouse_id, note?} → EN_CURSO (segundo abierto
+  en el mismo almacén → 409, ux parcial lo garantiza). `PUT /{id}/items`
+  upsert [{product_id, counted_qty}]; expected_qty = snapshot de stock_levels
+  al momento del upsert. `POST /{id}/apply` → UNA tx: AJUSTE por cada
+  diff ≠ 0 (quantity = counted − expected, referencia inventory_count_item_id)
+  + status APLICADO + applied_by/at. `POST /{id}/cancel` → CANCELADO.
+  APLICADO/CANCELADO son inmutables (todo mutador → 409).
 Tests: mayorista atómico (falla item → nada queda); receive dos veces 409;
-cancelar recibida 409; merma sin reason 422; stock refleja; kardex ordenado.
+cancelar recibida 409; presentación no comprable 422; movimiento COMPRA =
+qty × factor; cost_cents recalculado ÷ factor; merma sin reason 422; stock
+refleja; kardex ordenado; conteo: apply genera AJUSTEs exactos, segundo
+conteo abierto 409, apply dos veces 409.
 DoD: suite verde.
 
 ### T9 — Ventas/caja lectura + reportes
@@ -261,9 +308,11 @@ Por evento UNA tx: `INSERT sync_ingest_log ON CONFLICT (event_id) DO NOTHING`
   reintenta después: orden FIFO del outbox lo evita normalmente).
 - Actualiza terminals.last_seen_at al final del batch (una vez).
 Tests: mismo evento 2× → duplicate sin doble stock; batch 10 con el #3 malo →
-9 applied+1 error; venta de otra branch → error; totales mal → error; void →
+9 applied+1 error; venta de otra branch → error; totales mal → error;
+icbper_cents ≠ Σ items → error; presentación que no pertenece al product →
+error; movimiento VENTA = −(quantity × factor) en unidad base; void →
 ANULADA + contra-movimientos; customer nuevo se crea, existente se reusa
-(mismo doc 2 terminales); tax>0 con is_formalized=false → error.
+(mismo doc 2 terminales); tax>0 o icbper>0 con is_formalized=false → error.
 DoD: suite verde (la más completa del repo).
 
 ### T11 — Sync pull
@@ -271,17 +320,21 @@ DoD: suite verde (la más completa del repo).
 ```
 { cursor: M,
   business_settings: {...} | null,          // si cambió (updated_seq > N)
-  branches[], warehouses[],                  // solo la branch del JWT y sus almacenes
+  branches[], warehouses[],                  // solo la branch del JWT y SU almacén
+                                             // (branches.warehouse_id)
   users[],                                   // id, full_name, username, pin_hash,
                                              // is_active, updated_seq — JAMÁS password_hash
-  categories[], products[], customers[],     // filas updated_seq > N
+  product_categories[], brands[], products[],
+  product_presentations[], product_barcodes[],
+  customers[],                               // filas updated_seq > N
   rbac: {roles[], permissions[], role_permissions[], user_roles[]},  // snapshot COMPLETO siempre
   has_more: bool }                           // límite 500 filas/tabla; POS re-pide
 ```
 users filtrado: solo usuarios con algún rol en la branch del JWT o global.
-Tests: producto editado aparece con cursor viejo y no con nuevo; PIN cambiado
-llega; password_hash ausente en JSON (test explícito); rbac completo siempre;
-has_more funciona con 600 productos.
+Tests: producto editado aparece con cursor viejo y no con nuevo; barcode nuevo
+y presentación con precio cambiado llegan; PIN cambiado llega; password_hash
+ausente en JSON (test explícito); rbac completo siempre; has_more funciona
+con 600 productos.
 DoD: suite verde.
 
 ### T12 — Endurecimiento

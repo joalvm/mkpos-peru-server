@@ -31,9 +31,11 @@ ON CONFLICT (code) DO UPDATE
 -- (PROYECTO.md § 4), a diferencia de los enums de negocio.
 
 INSERT INTO permissions (code, description) VALUES
-    -- Sucursales
+    -- Sucursales y almacenes
     ('branches.read',    'Ver sucursales.'),
-    ('branches.manage',  'Crear y editar sucursales.'),
+    ('branches.manage',  'Crear y editar sucursales (incluye asignarles almacén).'),
+    ('warehouses.read',  'Ver almacenes.'),
+    ('warehouses.manage','Crear y editar almacenes.'),
     -- Usuarios y RBAC
     ('users.read',       'Ver usuarios.'),
     ('users.manage',     'Crear y editar usuarios, asignar roles, resetear PIN/contraseña.'),
@@ -44,10 +46,12 @@ INSERT INTO permissions (code, description) VALUES
     ('terminals.manage', 'Crear, editar y revocar terminales.'),
     ('terminals.enroll', 'Generar códigos de enrolamiento para terminales.'),
     -- Catálogo
-    ('categories.read',  'Ver categorías.'),
-    ('categories.manage','Crear y editar categorías.'),
-    ('products.read',    'Ver productos y precios.'),
-    ('products.manage',  'Crear y editar productos, cambiar precios.'),
+    ('product_categories.read',   'Ver categorías de productos.'),
+    ('product_categories.manage', 'Crear y editar categorías de productos.'),
+    ('brands.read',      'Ver marcas.'),
+    ('brands.manage',    'Crear y editar marcas.'),
+    ('products.read',    'Ver productos, presentaciones, códigos de barras y precios.'),
+    ('products.manage',  'Crear y editar productos, presentaciones y códigos de barras; cambiar precios.'),
     -- Clientes
     ('customers.read',   'Ver clientes.'),
     ('customers.manage', 'Crear y editar clientes.'),
@@ -57,8 +61,8 @@ INSERT INTO permissions (code, description) VALUES
     ('purchases.read',   'Ver compras.'),
     ('purchases.manage', 'Registrar compras, recibir pedidos, cancelar.'),
     -- Inventario
-    ('stock.read',       'Ver stock y kardex.'),
-    ('stock.adjust',     'Registrar ajustes de inventario y mermas.'),
+    ('stock.read',       'Ver stock, kardex y conteos físicos.'),
+    ('stock.adjust',     'Registrar ajustes de inventario, mermas y conteos físicos (abrir, aplicar, cancelar).'),
     -- Ventas
     ('sales.read',       'Ver ventas.'),
     ('sales.create',     'Registrar ventas en el POS.'),
@@ -95,10 +99,12 @@ SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON p.code IN (
     'branches.read',
+    'warehouses.read',
     'users.read',
     'roles.read',
     'terminals.read', 'terminals.enroll',
-    'categories.read', 'categories.manage',
+    'product_categories.read', 'product_categories.manage',
+    'brands.read', 'brands.manage',
     'products.read', 'products.manage',
     'customers.read', 'customers.manage',
     'suppliers.read', 'suppliers.manage',
@@ -117,7 +123,8 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON p.code IN (
-    'categories.read',
+    'product_categories.read',
+    'brands.read',
     'products.read',
     'customers.read', 'customers.manage',
     'stock.read',

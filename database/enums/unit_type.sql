@@ -1,9 +1,11 @@
--- Unidad de medida en la que se vende un producto. Las unidades fraccionables
--- (KG, G, L, ML, M) habilitan la venta a granel con cantidad numeric(10,3).
--- Valores en español, mayúsculas ASCII (regla del proyecto). Enum solo aditivo.
+-- Unidad BASE de un producto: la unidad en la que se lleva el stock y se
+-- expresan los movimientos del kardex. Cómo se vende o compra (unidad suelta,
+-- six-pack, caja x24, docena) NO va aquí: eso son product_presentations con su
+-- factor de conversión a esta unidad base.
+-- Las unidades fraccionables (KG, G, L, ML, M) habilitan cantidades
+-- numeric(10,3) (granel). Valores en español, mayúsculas ASCII. Enum solo aditivo.
 CREATE TYPE unit_type AS ENUM (
-    'UNIDAD',   -- pieza individual
-    'DOCENA',   -- grupo de 12 unidades (p. ej. huevos)
+    'UNIDAD',   -- pieza individual (la docena es una presentación con factor 12)
     'KG',       -- kilogramo (granel pesado en balanza)
     'G',        -- gramo (granel en cantidades pequeñas: especias, etc.)
     'L',        -- litro (líquidos a granel)
@@ -12,4 +14,4 @@ CREATE TYPE unit_type AS ENUM (
 );
 
 COMMENT ON TYPE unit_type IS
-    'Unidad de medida de venta de un producto; KG/G/L/ML/M permiten cantidades fraccionadas (granel).';
+    'Unidad base de stock de un producto; KG/G/L/ML/M permiten cantidades fraccionadas (granel). Las formas de venta/compra (six-pack, caja, docena) son product_presentations con factor sobre esta unidad.';
