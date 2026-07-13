@@ -96,5 +96,5 @@ psql "$DATABASE_URL" -f database/seeds/system.sql
   partición), retención = `DROP` de partición vía
   `logs.drop_partitions_older_than(n)`, escritura asíncrona desde el server y
   redacción previa (headers sensibles fuera; bodies de `/auth/*` y
-  `/enrollment` jamás). Backups críticos pueden excluirlo:
+  `/terminals/enrollment` jamás). Backups críticos pueden excluirlo:
   `pg_dump --exclude-schema=logs`.

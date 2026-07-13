@@ -1,11 +1,13 @@
 # PLAN server — API central Go (para IA ejecutora)
 
-Telegráfico a propósito. Ejecuta en orden T1→T15 (T16-T17 diferidas a F2+,
-ver INDEX). Protocolo obligatorio e
-invariantes (redondeo, contrato sync, formatos JSON): `../docs/plans/INDEX.md`.
-Verdad del proyecto: `../docs/PROYECTO.md` §§ 2, 4, 5, 6, 7 — leer ANTES de T1.
-Esquema BD YA existe, validado, intocable sin actualizar PROYECTO.md § 6:
-`database/` (init.sql orquesta; seeds/system.sql siempre; seeds/dev.sql la crea T3).
+Telegráfico a propósito. Ejecuta en orden T1→T15 (= F1). T16-T17 son de F2:
+se ejecutan DESPUÉS del f1-gate y ANTES de admin D8 (INDEX ordena). Protocolo
+obligatorio e invariantes (redondeo, contrato sync, formatos JSON):
+`../docs/plans/INDEX.md`. Verdad del proyecto: `../docs/PROYECTO.md`
+§§ 2, 4, 5, 6, 7 — leer ANTES de T1. Esquema BD YA existe, validado, intocable
+sin actualizar PROYECTO.md § 6: `database/` (init.sql orquesta;
+seeds/system.sql siempre; seeds/dev.sql la crea T3). Seguimiento: marcar cada
+tarea terminada en el roadmap de `README.md` (protocolo INDEX).
 
 ## Reglas duras (violarlas = trabajo rechazado)
 
@@ -16,18 +18,18 @@ Esquema BD YA existe, validado, intocable sin actualizar PROYECTO.md § 6:
 5. Nada de ORM. sqlc + pgx. SQL a mano en `db/queries/`. Prohibido SQL en handlers.
 6. Stock/dinero derivados de eventos. Prohibido UPDATE de saldos. Correcciones = movimiento nuevo.
 7. Lógica de negocio en `internal/domain` (puro, sin deps http/store), no en triggers/SPs.
-8. Jamás loggear: passwords, PINs, tokens, secrets, hashes, cuerpos de /auth. Request-id sí.
-9. Toda ruta declara su permiso o su tipo de auth. Cero endpoints "abiertos" salvo /health y /enrollment (rate-limited).
+8. Jamás loggear: passwords, PINs, tokens, secrets, hashes, cuerpos de /auth ni de /terminals/enrollment. Request-id sí.
+9. Toda ruta declara su permiso o su tipo de auth. Cero endpoints "abiertos" salvo /health y /terminals/enrollment (rate-limited).
 10. Errores wrapped `%w` con contexto. RFC 7807 hacia fuera, `detail` en español.
 11. Esquemas por dominio (PROYECTO § 6): TODA referencia SQL calificada `esquema.tabla` (`org.branches`, `sales.sales`) — DDL, queries sqlc y seeds; nada de search_path. En `public` solo extensiones y funciones infra.
-12. Respuestas según INDEX: paginación `?page=&per_page=` + meta Laravel-style; listados acotados = array pelado (decisión día 1, JAMÁS muta); errores RFC 7807 + extensiones `code`/`trace_id`/`errors[]`/`debug`(solo dev).
+12. Respuestas según INDEX: paginación `?page=&per_page=` (default 50, máx 200) + meta Laravel-style; listados acotados = array pelado (decisión día 1, JAMÁS muta); errores RFC 7807 + extensiones `code`/`trace_id`/`errors[]`/`debug`(solo dev).
 
 ## Stack fijo
 
 Go 1.26+ · huma v2 (router chi v5) · pgx v5 + sqlc · golang-jwt/jwt v5 (EdDSA ed25519) ·
 golang.org/x/crypto/argon2 · shopspring/decimal · koanf (env `MKPOS_*`) · log/slog (JSON) ·
-Taskfile (go-task) · air (dev) · golangci-lint · testcontainers-go o compose-db para tests de integración
-(elige compose-db: la BD de docker compose ya está; tests usan schema propio por corrida) ·
+Taskfile (go-task) · air (dev) · golangci-lint · tests de integración contra la BD de
+docker compose (schema propio por corrida; NO testcontainers: la BD compose ya está) ·
 PostgreSQL 18 (docker compose SOLO dev).
 
 ## Estructura objetivo
@@ -35,6 +37,7 @@ PostgreSQL 18 (docker compose SOLO dev).
 ```
 server/
 ├── cmd/api/main.go            # wire: config → pool → stores → api → listen (graceful shutdown)
+│                              # flag -openapi: imprime el spec YAML a stdout y sale (lo usa task generate)
 ├── cmd/hashgen/main.go        # CLI dev: argon2id/sha256 para seeds
 ├── internal/
 │   ├── config/                # koanf: MKPOS_DATABASE_URL, MKPOS_ADDR, MKPOS_JWT_PRIVATE_KEY,
@@ -46,9 +49,9 @@ server/
 │   ├── store/                 # GENERADO por sqlc — no editar
 │   ├── sync/                  # push: apply por event_type (una tx c/u); pull: snapshot/deltas
 │   ├── requestlog/            # T13: middleware + writer async → esquema logs; janitor de particiones
-│   ├── notify/                # T16 (diferida): campanita — fanout a notifications.notifications
-│   ├── reports/               # T17 (diferida): registro de kinds + workers SKIP LOCKED
-│   └── storage/               # T17 (diferida): archivos generados; v1 disco (MKPOS_STORAGE_DIR)
+│   ├── notify/                # T16 (F2): campanita — fanout a notifications.notifications
+│   ├── reports/               # T17 (F2): registro de kinds + workers SKIP LOCKED
+│   └── storage/               # T17 (F2): archivos generados; v1 disco (MKPOS_STORAGE_DIR)
 ├── db/queries/*.sql           # fuente sqlc: un archivo por dominio (branches.sql, sales.sql…)
 ├── database/                  # esquema (existe) + seeds/dev.sql (T3)
 ├── docker-compose.yml         # SOLO dev: postgres:18-alpine
@@ -66,7 +69,7 @@ POST /auth/refresh                            (cookie mkpos_rt O body {refresh_t
 POST /auth/logout                             (revoca refresh presentado)
 GET  /auth/me                                 (RequireUser → user+roles+permissions)
 POST /auth/token                              (M2M client_credentials, rate-limit)
-POST /enrollment                              (público, rate-limit fuerte, canjea código)
+POST /terminals/enrollment                    (público, rate-limit fuerte, canjea código)
 GET/POST/PATCH /branches[,/{id}]              (branches.read / branches.manage)
 GET/POST/PATCH /warehouses[,/{id}]            (warehouses.read / warehouses.manage)
 GET/POST/PATCH /users[,/{id}]                 (users.read / users.manage)
@@ -98,7 +101,8 @@ GET/POST /inventory-counts · GET /inventory-counts/{id}   (stock.read / stock.a
 PUT  /inventory-counts/{id}/items             (stock.adjust; upsert counted_qty)
 POST /inventory-counts/{id}/apply|/cancel     (stock.adjust; genera AJUSTEs / cancela)
 GET  /sales?branch_id&from&to&status&terminal_id · GET /sales/{id}  (sales.read)
-GET  /cash-sessions?branch_id&from&to · GET /cash-sessions/{id}     (cash.read)
+GET  /cash-sessions?branch_id&from&to&open= · GET /cash-sessions/{id}  (cash.read;
+                                               ?open=true = abiertas ahora — dashboards)
 GET  /reports/sales-daily|top-products|cash-differences|margin      (reports.read)
 POST /sync/push · GET /sync/pull?cursor=      (RequireTerminal, scopes sync)
 POST/GET /reports · GET /reports/{id}[,/download]  (reports.read; T17 — exports pesados async; los 4 reportes de T9 SIGUEN síncronos)
@@ -107,7 +111,8 @@ POST /notifications/{id}/read · POST /notifications/read-all         (RequireUs
 ```
 
 Paginación listados: `?page=&per_page=` (default 50, máx 200) →
-`{data, meta:{per_page, current_page, from, to, last_page, total}}`.
+`{data, meta:{per_page, current_page, from, to, last_page, total}}`, orden
+determinista documentado por endpoint (default `created_at DESC, id DESC`).
 Listados acotados = array pelado SIN envelope, SOLO: branches, warehouses,
 roles, permissions, product-categories, terminals (la forma por endpoint se
 decide día 1 y JAMÁS muta — INDEX). El pull de sync mantiene su cursor.
@@ -127,12 +132,23 @@ recrear public → `psql -f /database/init.sql` → `-f /database/seeds/system.s
 DoD: `docker compose up -d && task db:reset` verde desde clon; `task lint` verde.
 
 ### T2 — sqlc
-sqlc.yaml: engine postgresql; schema = `database/` (lee DDL completo); queries
-`db/queries/`; out `internal/store`; sql_package pgx/v5; overrides: uuid →
-google/uuid, numeric → shopspring/decimal. Queries SIEMPRE calificadas
-`esquema.tabla` (regla 11): sqlc resuelve lo no calificado contra public,
-donde no hay tablas. Query smoke `GetBranch` (org.branches) + main
-mínimo `/health` (huma sobre chi, ping pool).
+sqlc.yaml: engine postgresql; sql_package pgx/v5; queries `db/queries/`; out
+`internal/store`; overrides: uuid → google/uuid, numeric → shopspring/decimal.
+`schema:` = lista EXPLÍCITA en este orden (sqlc NO entiende los `\ir` de
+init.sql — no lo incluyas; tampoco extensions/triggers/indexes/seeds, sqlc no
+los necesita):
+```yaml
+schema:
+  - database/schemas.sql
+  - database/sequences.sql
+  - database/enums        # directorio: sqlc lee .sql en orden lexical
+  - database/tables       # 01..13 y al final 99_relations.sql (orden lexical correcto)
+  - database/functions.sql
+  - database/views.sql
+```
+Queries SIEMPRE calificadas `esquema.tabla` (regla 11): sqlc resuelve lo no
+calificado contra public, donde no hay tablas. Query smoke `GetBranch`
+(org.branches) + main mínimo `/health` (huma sobre chi, ping pool).
 DoD: `task generate` produce store compilable; `curl /health` → `{"status":"ok"}`.
 
 ### T3 — Seeds dev
@@ -150,17 +166,20 @@ literales para reproducibilidad):
   producto con presentación base (factor 1, default venta) + barcode donde
   aplique; gaseosa con presentaciones extra Six-pack ×6 (vendible, barcode
   propio) y Caja ×24 (solo compra, barcode propio); granel KG (arroz, azúcar,
-  menestras — tax_affectation EXONERADO donde aplique: frutas/verduras
-  frescas), aceite L, huevos presentación "Docena" factor 12 (enum DOCENA ya
+  menestras), aceite L, huevos presentación "Docena" factor 12 (enum DOCENA ya
   no existe), 1 producto is_open_price "VARIOS" (precio 0), bolsa
   icbper_applies=true; min_stock en ~10.
+  `tax_affectation`: TODO 'GRAVADO' SALVO exactamente 2 ítems frescos de
+  verdulería (p.ej. "Limón" y "Plátano") marcados 'EXONERADO' — lista cerrada;
+  PROHIBIDO clasificar tributariamente el resto (eso es de F3 con la dueña).
 - 3 suppliers (Alvarez Bohl RUC, Kompass RUC, "Mercado mayorista" sin RUC).
 - 1 terminal por branch, code GLOBAL único `S01-T01`, `S02-T01` (PENDIENTE).
 - 2 customers (DNI, RUC). 1 purchase MAYORISTA RECIBIDA por branch con items
   POR PRESENTACIÓN (caja ×24 gaseosa, saco ×50 arroz) → stock_movements COMPRA
   en unidad base (qty × factor; warehouse de la branch, occurred_at = received_at).
-DoD: `task db:reset && task db:seed:dev` verde; `SELECT * FROM stock_levels`
-devuelve filas con branch_id y warehouse_id coherentes.
+DoD: `task db:reset && task db:seed:dev` verde; `SELECT * FROM
+inventory.stock_levels` devuelve filas con warehouse_id coherente con las
+branches sembradas.
 
 ### T4 — Núcleo HTTP
 huma v2 + chi. Versionado `/api/v1`. Middleware en orden: request-id → slog
@@ -170,12 +189,14 @@ Errores RFC 7807 huma con extensiones (regla 12): `code` estable por tipo,
 `trace_id` = request-id (header `X-Request-Id` en TODA respuesta), `errors[]`
 de huma en validación, `debug` (trace) solo `MKPOS_ENV=dev`; `detail`
 español. Graceful shutdown (SIGTERM, drain 15s).
-`task generate` vuelca openapi a `./openapi.yaml` (composición: arranca server
-en modo export o usa huma CLI API) y se commitea. Tags de huma por dominio
-(los usa el export Postman). `task api:postman`: `npx openapi-to-postmanv2
--s openapi.yaml -o postman/mkpos.postman_collection.json -O
-folderStrategy=Tags` + environment con {{base_url}}, {{access_token}},
-{{terminal_token}}; se commitea (npx = tooling dev, no dependencia Go).
+Export del contrato: `cmd/api` acepta flag `-openapi` → construye la API huma
+SIN levantar el listener, imprime `api.OpenAPI()` en YAML a stdout y sale.
+`task generate` = sqlc + `go run ./cmd/api -openapi > openapi.yaml`; se
+commitea. Tags de huma por dominio (los usa el export Postman).
+`task api:postman`: `npx openapi-to-postmanv2 -s openapi.yaml -o
+postman/mkpos.postman_collection.json -O folderStrategy=Tags` + environment
+con {{base_url}}, {{access_token}}, {{terminal_token}}; se commitea (npx =
+tooling dev, no dependencia Go).
 DoD: openapi.yaml y postman/ generados y commiteados; headers de error
 correctos (X-Request-Id presente); test smoke.
 
@@ -212,11 +233,11 @@ DoD: suite T5 verde contra BD compose.
   `XXXX-XXXX-XXXX` (A-Z2-9 sin ambiguos, crypto/rand), responde el claro UNA vez,
   BD solo SHA-256, expira 72h; invalida (invalidated_at) códigos previos no usados
   de esa terminal.
-- `POST /enrollment` (público, rate-limit 5/min/IP) {code}: valida
+- `POST /terminals/enrollment` (público, rate-limit 5/min/IP) {code}: valida
   hash+vigencia+no usado+no invalidado+terminal PENDIENTE → genera client_id
   (`term_`+uuid) y client_secret 256-bit → guarda argon2id → marca used_at,
   terminal ACTIVO+enrolled_at → responde {client_id, client_secret, terminal,
-  branch, warehouse_id default} UNA vez.
+  branch, warehouse_id} UNA vez (PROYECTO § 4).
 - `POST /auth/token` {grant_type:"client_credentials", client_id, client_secret}
   → JWT 15 min claims sub=terminal_id, `typ:"terminal"`, `branch_id`, scopes
   `sync:push sync:pull catalog:read`. Rechaza terminal ≠ ACTIVO o credencial
@@ -259,8 +280,10 @@ Particularidades:
   exige ruc y legal_name presentes (422 si no) — la activación REAL del cálculo
   la hace el POS al ver el flag por pull. `icbper_cents` editable (≥ 0; tarifa
   legal sube cada año).
-Tests por recurso: crear ok, validación 422, permiso 403, unique 409, paginación
-cursor estable, soft-delete oculta de listados default (`?include_inactive=` para verlos).
+Tests por recurso: crear ok, validación 422, permiso 403, unique 409,
+paginación page/per_page estable (orden determinista; misma fila no aparece
+en dos páginas), soft-delete oculta de listados default (`?include_inactive=`
+para verlos).
 DoD: suite verde; openapi regenerado commiteado.
 
 ### T8 — Compras y stock
@@ -280,8 +303,8 @@ Transiciones en `internal/domain` (tabla explícita estado×acción).
 - `total_cents` y `items[].total_cents` los calcula el server (redondeo canónico);
   si el cliente manda totales, se ignoran.
 - `GET /stock`: stock_levels + products (name, unit, min_stock) + flag low
-  (`quantity < min_stock AND min_stock > 0`); filtro branch (suma almacenes) o
-  warehouse.
+  (`quantity < min_stock AND min_stock > 0`); filtro branch (= su almacén vía
+  branches.warehouse_id) o warehouse.
 - `GET /products/{id}/kardex`: movimientos orden occurred_at DESC, con origen
   legible (tipo + referencia venta/compra + usuario), paginado.
 - `POST /stock/adjustments` {warehouse_id, product_id, type AJUSTE|MERMA,
@@ -306,7 +329,9 @@ DoD: suite verde.
 Ventas NACEN en el POS (sync T10). Aquí solo lectura + agregados.
 - `GET /sales` filtros branch/terminal/status/rango sold_on_local; `GET /sales/{id}`
   embebe items+payments+document(+customer).
-- `GET /cash-sessions` + `/{id}` (movimientos + Σ ventas EFECTIVO + fórmula arqueo).
+- `GET /cash-sessions` + `/{id}` (movimientos + Σ ventas EFECTIVO + fórmula
+  arqueo). Filtros: branch, rango, `?open=true` (closed_at IS NULL — lo usan
+  los dashboards de admin y mobile para "cajas abiertas ahora").
 - `internal/domain`: fórmula arqueo ÚNICA:
   `expected = opening + Σ payments EFECTIVO de ventas COMPLETADAS de la sesión + Σ INGRESO − Σ RETIRO`.
 - Reportes (reports.read; todos filtro branch opcional + rango obligatorio ≤ 366d):
@@ -315,16 +340,16 @@ Ventas NACEN en el POS (sync T10). Aquí solo lectura + agregados.
   (sesiones con difference ≠ 0), `margin` (venta − costo referencial cost_cents;
   marcado "aproximado" en description del campo).
 Tests domain arqueo: sin ventas / con anuladas excluidas / con retiros; reportes
-cuadran a mano contra seeds dev.
+cuadran a mano contra seeds dev; ?open= devuelve solo abiertas.
 DoD: suite verde.
 
 ### T10 — Sync push (idempotente) ★corazón
 `POST /sync/push` (RequireTerminal) body `{events:[{event_id, event_type,
 occurred_at, payload}]}` máx 100, orden del array respetado, secuencial.
 Respuesta por evento `{event_id, status: applied|duplicate|error, message?}`.
-Por evento UNA tx: `INSERT sync_ingest_log ON CONFLICT (event_id) DO NOTHING`
-→ 0 filas = duplicate (ack sin re-aplicar). Aplica según contrato de INDEX.md
-(tipos, validaciones — TODAS). Extras:
+Por evento UNA tx: `INSERT sync.sync_ingest_log ON CONFLICT (event_id) DO
+NOTHING` → 0 filas = duplicate (ack sin re-aplicar). Aplica según contrato de
+INDEX.md (tipos, validaciones — TODAS). Extras:
 - Fechas: si |sold_at − now()| > 48h → aplicar + WARN slog (reloj de tienda).
 - `error` de validación → NO se inserta en ingest_log (POS puede corregir y
   reintentar) SALVO error permanente evidente (FK inexistente, CHECK violado):
@@ -364,8 +389,8 @@ DoD: suite verde.
 
 ### T12 — Endurecimiento
 Rate limit memoria por IP: /auth/login (10/min), /auth/token (20/min),
-/enrollment (5/min) + por username en login (lockout T5). Security headers
-(nosniff, no-store en auth). Límite body 1 MiB (push 5 MiB). Validar
+/terminals/enrollment (5/min) + por username en login (lockout T5). Security
+headers (nosniff, no-store en auth). Límite body 1 MiB (push 5 MiB). Validar
 Content-Type. `terminals.last_seen_at` ya cubierto. Revisión: grep secretos en
 logs (test que loggea y asserta ausencia). pgx pool: max conns config (default 10),
 health check period.
@@ -379,8 +404,8 @@ con status ≥ 400) → canal buffered → writer batch (INSERT multirow cada ~1
 o 100 filas). Canal lleno = descartar y contar (WARN slog): el request path
 JAMÁS espera al log.
 - Redacción ANTES de insertar: denylist headers (authorization, cookie,
-  set-cookie, x-api-key…); bodies de `/auth/*` y `/enrollment` JAMÁS
-  (regla 8); body > MKPOS_LOGS_MAX_BODY_KB (default 32) truncado + flag.
+  set-cookie, x-api-key…); bodies de `/auth/*` y `/terminals/enrollment`
+  JAMÁS (regla 8); body > MKPOS_LOGS_MAX_BODY_KB (default 32) truncado + flag.
 - Opt-in por ruta al registrarla; `/health` nunca; pulls de sync sin cambios
   no se loguean por default (config).
 - Janitor diario (goroutine + ticker): `logs.ensure_partitions(1)` +
@@ -403,11 +428,12 @@ con arqueo → reportes cuadran. Asserts numéricos exactos céntimo a céntimo.
 DoD: `task test && task test:e2e` verdes desde clon limpio.
 
 ### T15 — Cierre F1 backend
-README server real (comandos, env vars, estructura, cómo correr tests).
-openapi.yaml final regenerado + commiteado. `task generate` idempotente (diff
-limpio si nada cambió). CI GitHub Actions `.github/workflows/ci.yml`: postgres
-service 18, task db:reset + test + lint (REQUIERE GATE-H1; si repos no existen
-aún, dejar el yml commiteado y anotarlo en el reporte).
+README server: sección técnica real (comandos, env vars, estructura, cómo
+correr tests) + checkboxes T1-T15 marcados en el roadmap. openapi.yaml final
+regenerado + commiteado. `task generate` idempotente (diff limpio si nada
+cambió). CI GitHub Actions `.github/workflows/ci.yml`: postgres service 18,
+task db:reset + test + lint (REQUIERE GATE-H1; si repos no existen aún, dejar
+el yml commiteado y anotarlo en el reporte).
 Checklist PROYECTO.md § 9 completo. Reporte final: endpoints totales, cobertura
 de dominios, deudas anotadas.
 DoD global: `docker compose up -d && task setup && task db:reset && task
@@ -416,14 +442,15 @@ limpio. openapi.yaml refleja TODOS los endpoints.
 
 ---
 
-## Tareas diferidas (F2+; INDEX las ordena — ejecutar antes de la primera pantalla que las consuma)
+## Tareas F2 (después del f1-gate; OBLIGATORIAS antes de admin D8 — INDEX ordena)
 
 ### T16 — Notificaciones (campanita)
 `internal/notify`: `Notify(userID, type, title, body?, data)` → fila en
 notifications.notifications (fanout-on-write: una fila por destinatario).
 Registro de tipos en código: REPORTE_LISTO, STOCK_BAJO… (valores español,
 PROYECTO § 6). Sin push FCM (decisión F3) ni SSE (aditivo futuro): entrega =
-polling del cliente (TanStack Query 30-60 s + focus).
+polling del cliente (TanStack Query 30-60 s + focus). Consumidores: admin D8
+(panel) y mobile M6 (app).
 Endpoints (RequireUser; cada quien SOLO las suyas — ajena = 404, no filtrar
 existencia): `GET /notifications` (paginado, `?unread_only=`) ·
 `GET /notifications/unread-count` · `POST /notifications/{id}/read`
@@ -449,7 +476,7 @@ encolar (inválido = 422 sin fila) → 202 + reporte · `GET /reports` (míos,
 paginado) · `GET /reports/{id}` (poll de estado) · `GET /reports/{id}/download`
 (solo COMPLETADO no vencido). Formato v1: CSV (encoding/csv); XLSX (excelize)
 recién cuando una pantalla lo pida. Los reportes rápidos de T9 SIGUEN
-síncronos: esto es para exports pesados.
+síncronos: esto es para exports pesados (consumidor: admin D8).
 Tests: flujo encolar→worker→archivo→notificación; 2 workers no toman la misma
 fila (SKIP LOCKED); kind inválido 422 sin encolar; download ajeno 404;
 vencido 410; fallo deja FALLIDO + error legible; arranque rescata huérfanos.
