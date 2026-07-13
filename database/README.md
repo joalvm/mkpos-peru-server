@@ -12,21 +12,21 @@ para extensiones y funciones de infraestructura transversal
 public**. Toda referencia SQL (DDL, queries de sqlc, seeds) va **siempre
 calificada** `esquema.tabla`: nada depende del `search_path`.
 
-| # | Esquema | Contenido |
-|---|---|---|
-| 01 | `org` | `business_settings` (singleton), `warehouses`, `branches` |
-| 02 | `access` | `users`, `roles`, `permissions`, `role_permissions`, `user_roles`, `refresh_tokens` |
-| 03 | `terminals` | `terminals`, `terminal_enrollment_codes`, `terminal_credentials` |
-| 04 | `catalog` | `product_categories`, `brands`, `products`, `product_presentations`, `product_barcodes` |
-| 05 | `customers` | `customers` |
-| 06 | `sales` | `sales`, `sale_items`, `payments`, `sale_documents` |
-| 07 | `inventory` | `stock_movements` (kardex), `inventory_counts`, `inventory_count_items`, vista `stock_levels` |
-| 08 | `cash` | `cash_sessions`, `cash_movements` |
-| 09 | `purchases` | `suppliers`, `purchases`, `purchase_items` |
-| 10 | `sync` | `sync_ingest_log`, secuencia `sync_seq` |
-| 11 | `reports` | `reports` (estado + cola SKIP LOCKED de reportes en segundo plano) |
-| 12 | `notifications` | `notifications` (campanita web/mobile; no sincroniza al POS) |
-| 13 | `logs` | telemetría HTTP `requests` + satélites 1:1 (`request_queries/bodies/headers/agents/errors`, `responses`) |
+| #   | Esquema         | Contenido                                                                                                |
+| --- | --------------- | -------------------------------------------------------------------------------------------------------- |
+| 01  | `org`           | `business_settings` (singleton), `warehouses`, `branches`                                                |
+| 02  | `access`        | `users`, `roles`, `permissions`, `role_permissions`, `user_roles`, `refresh_tokens`                      |
+| 03  | `terminals`     | `terminals`, `terminal_enrollment_codes`, `terminal_credentials`                                         |
+| 04  | `catalog`       | `product_categories`, `brands`, `products`, `product_presentations`, `product_barcodes`                  |
+| 05  | `customers`     | `customers`                                                                                              |
+| 06  | `sales`         | `sales`, `sale_items`, `payments`, `sale_documents`                                                      |
+| 07  | `inventory`     | `stock_movements` (kardex), `inventory_counts`, `inventory_count_items`, vista `stock_levels`            |
+| 08  | `cash`          | `cash_sessions`, `cash_movements`                                                                        |
+| 09  | `purchases`     | `suppliers`, `purchases`, `purchase_items`                                                               |
+| 10  | `sync`          | `sync_ingest_log`, secuencia `sync_seq`                                                                  |
+| 11  | `reports`       | `reports` (estado + cola SKIP LOCKED de reportes en segundo plano)                                       |
+| 12  | `notifications` | `notifications` (campanita web/mobile; no sincroniza al POS)                                             |
+| 13  | `logs`          | telemetría HTTP `requests` + satélites 1:1 (`request_queries/bodies/headers/agents/errors`, `responses`) |
 
 Los enums viven en el esquema de su dominio (`catalog.unit_type`,
 `sales.payment_method`, `inventory.movement_type`…).
@@ -38,21 +38,21 @@ Los enums viven en el esquema de su dominio (`catalog.unit_type`,
 archivo por dominio, misma numeración en las tres carpetas — para que ningún
 archivo crezca hasta volverse ilegible:
 
-| Orden | Archivo/carpeta | Contenido |
-|---|---|---|
-| 1 | `schemas.sql` | Los 13 esquemas de dominio, con COMMENT |
-| 2 | `extensions.sql` | `pg_trgm` (uuidv7 es core en PG 18) |
-| 3 | `sequences.sql` | `sync.sync_seq` — reloj lógico del pull de sync |
-| 4 | `enums/*.sql` | Un archivo por enum; **valores en español** |
-| 5 | `tables/01..13_*.sql` | Tablas por dominio + COMMENT; **sin FK** |
-| 6 | `tables/99_relations.sql` | **TODAS las FK** del esquema (convención: relaciones al final, panorama de corrido; el orden de creación entre dominios deja de importar). `logs` sin FK a propósito |
-| 7 | `functions.sql` | Trigger functions (`public.set_updated_at`, `public.set_updated_seq`) + gestión de particiones (`logs.ensure_partitions`, `logs.drop_partitions_older_than`) |
-| 8 | `triggers/01..12_*.sql` | Triggers de infraestructura por dominio (nunca lógica de negocio) |
-| 9 | `views.sql` | `inventory.stock_levels` (stock derivado del ledger) |
-| 10 | `indexes/01..13_*.sql` | Únicos (`ux_`), FK e índices de consulta (`ix_`) por dominio |
-| 11 | `SELECT logs.ensure_partitions(1)` | Particiones mensuales iniciales de la telemetría |
-| — | `seeds/system.sql` | Roles, permisos, otorgamientos + `business_settings` inicial (idempotente, corre siempre) |
-| — | `seeds/dev.sql` | Datos de prueba (pendiente; ver PLAN.md T3) |
+| Orden | Archivo/carpeta                    | Contenido                                                                                                                                                            |
+| ----- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `schemas.sql`                      | Los 13 esquemas de dominio, con COMMENT                                                                                                                              |
+| 2     | `extensions.sql`                   | `pg_trgm` (uuidv7 es core en PG 18)                                                                                                                                  |
+| 3     | `sequences.sql`                    | `sync.sync_seq` — reloj lógico del pull de sync                                                                                                                      |
+| 4     | `enums/*.sql`                      | Un archivo por enum; **valores en español**                                                                                                                          |
+| 5     | `tables/01..13_*.sql`              | Tablas por dominio + COMMENT; **sin FK**                                                                                                                             |
+| 6     | `tables/99_relations.sql`          | **TODAS las FK** del esquema (convención: relaciones al final, panorama de corrido; el orden de creación entre dominios deja de importar). `logs` sin FK a propósito |
+| 7     | `functions.sql`                    | Trigger functions (`public.set_updated_at`, `public.set_updated_seq`) + gestión de particiones (`logs.ensure_partitions`, `logs.drop_partitions_older_than`)         |
+| 8     | `triggers/01..12_*.sql`            | Triggers de infraestructura por dominio (nunca lógica de negocio)                                                                                                    |
+| 9     | `views.sql`                        | `inventory.stock_levels` (stock derivado del ledger)                                                                                                                 |
+| 10    | `indexes/01..13_*.sql`             | Únicos (`ux_`), FK e índices de consulta (`ix_`) por dominio                                                                                                         |
+| 11    | `SELECT logs.ensure_partitions(1)` | Particiones mensuales iniciales de la telemetría                                                                                                                     |
+| —     | `seeds/system.sql`                 | Roles, permisos, otorgamientos + `business_settings` inicial (idempotente, corre siempre)                                                                            |
+| —     | `seeds/dev.sql`                    | Datos de prueba (pendiente; ver PLAN.md T3)                                                                                                                          |
 
 ## Uso
 

@@ -32,11 +32,11 @@ la dueña (repo `apps`).
 
 ## Cómo se ejecuta este repo
 
-| Documento | Para qué |
-|---|---|
-| [`PLAN.md`](PLAN.md) | Plan de tareas T1→T17 para la IA ejecutora (qué hacer y cómo, en orden) |
-| [`database/README.md`](database/README.md) | Esquema de BD: 13 esquemas por dominio, orden de ejecución, convenciones |
-| `../docs/plans/INDEX.md` | Protocolo del agente, orden global entre repos e invariantes (redondeo, formatos JSON, contrato de sync) |
+| Documento                                  | Para qué                                                                                                 |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| [`PLAN.md`](PLAN.md)                       | Plan de tareas T1→T17 para la IA ejecutora (qué hacer y cómo, en orden)                                  |
+| [`database/README.md`](database/README.md) | Esquema de BD: 13 esquemas por dominio, orden de ejecución, convenciones                                 |
+| `../docs/plans/INDEX.md`                   | Protocolo del agente, orden global entre repos e invariantes (redondeo, formatos JSON, contrato de sync) |
 
 La estructura objetivo del código está en PROYECTO.md § 2. El contrato
 `openapi.yaml` se genera desde el código y se commitea: de él nacen el
